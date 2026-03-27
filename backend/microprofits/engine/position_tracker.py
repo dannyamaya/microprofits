@@ -152,12 +152,15 @@ class PositionTracker:
         except Exception:
             pass
 
-        # Update SL to be based on actual fill price (not candle price)
-        if actual_sl != preliminary_sl:
+        # Only correct SL if it gives MORE room (moves SL further from entry)
+        # Never tighten — if fill was above candle price, preliminary SL is safer
+        if actual_sl < preliminary_sl:
             try:
                 await self._client.update_position_fast(actual_deal_id, actual_sl)
             except Exception:
-                pass  # worst case we keep the preliminary SL
+                actual_sl = preliminary_sl  # keep preliminary if update fails
+        else:
+            actual_sl = preliminary_sl  # keep the lower (safer) SL
 
         db_id = await self._store.save_trade_open(
             epic=signal.epic,
