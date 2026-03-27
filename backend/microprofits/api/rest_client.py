@@ -217,17 +217,38 @@ class RestClient:
         self,
         deal_id: str,
         stop_level: float,
-    ) -> None:
-        """Fast SL update — no confirmation wait, but check HTTP status."""
-        body = {"stopLevel": round(stop_level, 2), "guaranteedStop": False}
+    ) -> float:
+        """Fast SL update. Returns the actual SL level set (may be lower than requested
+        if Capital.com enforces a max SL value)."""
+        target_sl = round(stop_level, 2)
+        body = {"stopLevel": target_sl, "guaranteedStop": False}
         resp = await self._request("PUT", f"/api/v1/positions/{deal_id}", json=body)
-        if resp.status_code != 200:
-            body_text = ""
+
+        if resp.status_code == 200:
+            return target_sl
+
+        # Parse error — Capital.com may tell us the max allowed SL
+        try:
+            error_data = resp.json()
+            error_code = error_data.get("errorCode", "")
+        except Exception:
+            error_code = resp.text
+
+        # "error.invalid.stoploss.maxvalue: 23307.3" — SL too close to current price
+        # Retry with the max allowed value
+        if "stoploss.maxvalue" in error_code:
             try:
-                body_text = resp.text
-            except Exception:
+                max_sl = float(error_code.split(": ")[1])
+                if max_sl < target_sl:
+                    body = {"stopLevel": round(max_sl, 2), "guaranteedStop": False}
+                    resp2 = await self._request("PUT", f"/api/v1/positions/{deal_id}", json=body)
+                    if resp2.status_code == 200:
+                        logger.info(f"SL capped by Capital.com: wanted {target_sl}, set {max_sl}")
+                        return max_sl
+            except (ValueError, IndexError):
                 pass
-            raise OrderError("", "FAILED", f"SL update rejected: {resp.status_code} {body_text}")
+
+        raise OrderError("", "FAILED", f"SL update rejected: {resp.status_code} {error_code}")
 
     # -- confirmation --------------------------------------------------------
 

@@ -254,15 +254,18 @@ class PositionTracker:
 
             if new_sl is not None and new_sl > (tracked.stop_level or 0):
                 try:
-                    await self._client.update_position_fast(
+                    actual_sl = await self._client.update_position_fast(
                         deal_id=deal_id,
                         stop_level=new_sl,
                     )
                     old_locks = tracked.trail_locks
                     if event == "TRAIL_MOVE":
-                        tracked.trail_locks = expected_locks
+                        # Calculate actual locks based on what Capital.com accepted
+                        actual_distance = actual_sl - tracked.entry_price
+                        actual_locks = max(0, int(actual_distance / tp_distance))
+                        tracked.trail_locks = actual_locks if actual_locks > 0 else expected_locks
                     tracked.breakeven_hit = True
-                    tracked.stop_level = new_sl
+                    tracked.stop_level = actual_sl
                     locked_profit = tracked.trail_locks * profit_target
 
                     await self._store.log_audit(
