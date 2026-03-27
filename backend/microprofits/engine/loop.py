@@ -80,13 +80,6 @@ class ScalperLoop:
                 config = await self.store.get_bot_config()
                 poll_interval = config.get("poll_interval", 2.0)
 
-                # Sync safety config
-                self.tracker.safety.update_config(
-                    max_consecutive=config.get("safety_max_consecutive", 10),
-                    loss_threshold=config.get("safety_loss_threshold", 1.0),
-                    cooldown_seconds=config.get("safety_cooldown", 3600.0),
-                )
-
                 if not config.get("enabled", False):
                     await asyncio.sleep(poll_interval)
                     continue
@@ -124,8 +117,11 @@ class ScalperLoop:
         history = self._histories[epic]
         min_stop = self._min_stop_distances.get(epic, 6.0)
 
-        # Fetch latest candles
-        raw = await self.client.get_prices(epic, "MINUTE", max_bars=3)
+        try:
+            raw = await self.client.get_prices(epic, "MINUTE", max_bars=3)
+        except Exception as e:
+            logger.error(f"Failed to fetch candles for {epic}: {e}")
+            return
         if len(raw) < 2:
             return
 
