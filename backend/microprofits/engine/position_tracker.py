@@ -234,68 +234,61 @@ class PositionTracker:
             # Update last known UPL
             tracked.last_upl = live.upl
 
-            # --- Breakeven at half profit_target ---
-            half_target = profit_target / 2.0
-            if not tracked.breakeven_hit and live.upl >= half_target:
-                be_sl = round(tracked.entry_price, 2)
-                try:
-                    await self._client.update_position_fast(
-                        deal_id=deal_id,
-                        stop_level=be_sl,
-                    )
-                    tracked.breakeven_hit = True
-                    tracked.stop_level = be_sl
-                    await self._store.log_audit(
-                        epic, "BREAKEVEN",
-                        {"deal_id": deal_id, "upl": live.upl, "new_sl": be_sl},
-                    )
-                    logger.info(
-                        f"BREAKEVEN {epic} deal={deal_id}: "
-                        f"UPL=${live.upl:.2f} >= ${half_target:.2f} → SL moved to entry {be_sl}"
-                    )
-                except OrderError as e:
-                    logger.error(f"Failed to set breakeven for {deal_id}: {e}")
-
-            # --- Trailing SL logic ---
-            # tp_distance = points per profit_target dollar
+            # --- Single unified SL logic: breakeven + trail in one decision ---
             tp_distance = profit_target / num_contracts
-            # How many increments has price moved above entry?
             price_above_entry = live.open_level + (live.upl / live.size) - tracked.entry_price if live.size else 0
             expected_locks = int(price_above_entry / tp_distance)
 
-            if expected_locks > tracked.trail_locks:
-                # Price crossed a new profit level — move SL up
-                new_lock = expected_locks
-                new_sl = tracked.entry_price + (new_lock * tp_distance)
-                new_sl = round(new_sl, 2)
+            # Determine best SL level right now
+            new_sl: float | None = None
+            event: str = ""
 
+            if expected_locks > tracked.trail_locks:
+                # Full trail jump(s) — go straight to the highest lock
+                new_sl = round(tracked.entry_price + (expected_locks * tp_distance), 2)
+                event = "TRAIL_MOVE"
+            elif not tracked.breakeven_hit and live.upl >= (profit_target / 2.0):
+                # Between half-target and first full lock — breakeven only
+                new_sl = round(tracked.entry_price, 2)
+                event = "BREAKEVEN"
+
+            if new_sl is not None and new_sl > (tracked.stop_level or 0):
                 try:
                     await self._client.update_position_fast(
                         deal_id=deal_id,
                         stop_level=new_sl,
                     )
                     old_locks = tracked.trail_locks
-                    tracked.trail_locks = new_lock
+                    if event == "TRAIL_MOVE":
+                        tracked.trail_locks = expected_locks
+                    tracked.breakeven_hit = True
                     tracked.stop_level = new_sl
-                    locked_profit = new_lock * profit_target
+                    locked_profit = tracked.trail_locks * profit_target
 
                     await self._store.log_audit(
-                        epic, "TRAIL_MOVE",
+                        epic, event,
                         {
                             "deal_id": deal_id,
                             "old_locks": old_locks,
-                            "new_locks": new_lock,
+                            "new_locks": tracked.trail_locks,
                             "new_sl": new_sl,
                             "locked_profit": locked_profit,
+                            "upl": live.upl,
                         },
                     )
-                    logger.info(
-                        f"TRAIL {epic} deal={deal_id}: "
-                        f"SL moved to {new_sl} (locked ${locked_profit:.2f}, "
-                        f"{new_lock} jumps)"
-                    )
+                    if event == "TRAIL_MOVE":
+                        logger.info(
+                            f"TRAIL {epic} deal={deal_id}: "
+                            f"SL → {new_sl} (locked ${locked_profit:.2f}, "
+                            f"{old_locks} → {tracked.trail_locks} jumps, UPL=${live.upl:.2f})"
+                        )
+                    else:
+                        logger.info(
+                            f"BREAKEVEN {epic} deal={deal_id}: "
+                            f"SL → {new_sl} (UPL=${live.upl:.2f})"
+                        )
                 except OrderError as e:
-                    logger.error(f"Failed to trail SL for {deal_id}: {e}")
+                    logger.error(f"Failed to update SL for {deal_id}: {e}")
 
         for deal_id in to_remove:
             self._positions.pop(deal_id, None)
