@@ -78,7 +78,7 @@ class ScalperLoop:
         while self._running:
             try:
                 config = await self.store.get_bot_config()
-                poll_interval = config.get("poll_interval", 5.0)
+                poll_interval = config.get("poll_interval", 2.0)
 
                 # Sync safety config
                 self.tracker.safety.update_config(
@@ -135,7 +135,7 @@ class ScalperLoop:
         for c in closed_candles:
             history.push(c)
 
-        # Resolve effective config (symbol overrides global)
+        # Resolve effective config
         num_contracts = symbol_cfg.get("num_contracts") or config.get("num_contracts", 1)
         profit_target = symbol_cfg.get("profit_target") or config.get("profit_target", 5)
         stop_loss = symbol_cfg.get("stop_loss") or config.get("stop_loss", 10)
@@ -144,15 +144,20 @@ class ScalperLoop:
         ema_period = config.get("ema_period", 5)
         cooldown = config.get("entry_cooldown", 30.0)
 
-        # 1. Trail existing positions + detect server-side closes
+        # 1. Detect server-side closes (TP/SL hit) + fast reopen
         await self.tracker.check_positions(
             epic=epic,
             profit_target=profit_target,
-            num_contracts=num_contracts,
+            max_positions=max_positions,
+            scalper=self.scalper,
+            current_candle=current_candle,
+            history=history,
             config=config,
+            symbol_cfg=symbol_cfg,
+            min_stop_distance=min_stop,
         )
 
-        # 2. Check for new entry
+        # 2. Check for new entry (with cooldown)
         if self.tracker.can_open(epic, max_positions, cooldown):
             signal = self.scalper.check_entry(
                 epic=epic,

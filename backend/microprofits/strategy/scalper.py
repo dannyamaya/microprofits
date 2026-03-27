@@ -14,8 +14,9 @@ class EntrySignal:
     epic: str
     direction: str
     size: float
-    sl_distance: float  # points below entry
-    entry_price: float  # reference price (candle), actual SL set after fill
+    stop_level: float
+    profit_level: float
+    entry_price: float
 
 
 class MomentumScalper:
@@ -48,22 +49,23 @@ class MomentumScalper:
                 logger.debug(f"{epic}: EMA slope negative — skipping")
                 return None
 
-        # Calculate SL/TP as absolute price levels
-        # profit_target and stop_loss are in USD
         # points = dollars / num_contracts
         tp_distance = profit_target / num_contracts
         sl_distance = stop_loss / num_contracts
 
-        # Enforce minimum stop distance from Capital.com
         if sl_distance < min_stop_distance:
             sl_distance = min_stop_distance
         if tp_distance < min_stop_distance:
             tp_distance = min_stop_distance
 
+        stop_level = round(current_price - sl_distance, 2)
+        profit_level = round(current_price + tp_distance, 2)
+
         return EntrySignal(
             epic=epic,
             direction="BUY",
             size=num_contracts,
-            sl_distance=sl_distance,
+            stop_level=stop_level,
+            profit_level=profit_level,
             entry_price=current_price,
         )

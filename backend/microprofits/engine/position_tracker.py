@@ -14,6 +14,8 @@ from microprofits.data.store import Store
 from microprofits.engine.safety import SafetyLock
 from microprofits.strategy.scalper import EntrySignal
 
+FAST_TP_THRESHOLD = 15.0  # seconds — TP hit within this = fast, reopen instantly
+
 
 @dataclass
 class TrackedPosition:
@@ -23,11 +25,11 @@ class TrackedPosition:
     size: float
     entry_price: float
     stop_level: float | None
+    profit_level: float | None
     db_id: int | None = None
     opened_at: datetime = field(default_factory=datetime.utcnow)
+    opened_ts: float = field(default_factory=time.time)
     last_upl: float = 0.0
-    trail_locks: int = 0  # how many profit_target increments we've locked
-    breakeven_hit: bool = False  # SL moved to entry price at half profit_target
 
 
 class PositionTracker:
@@ -58,6 +60,12 @@ class PositionTracker:
             return False
         return True
 
+    def can_open_fast(self, epic: str, max_positions: int) -> bool:
+        """Fast reopen after quick TP — no cooldown, only check count + safety."""
+        if self.safety.is_locked:
+            return False
+        return self.count_for_epic(epic) < max_positions
+
     # -- recovery on startup -------------------------------------------------
 
     async def recover(self) -> None:
@@ -69,58 +77,46 @@ class PositionTracker:
             deal_id = trade["deal_id"]
             live = live_map.get(deal_id)
             if live is not None:
-                # Estimate trail_locks from current SL vs entry
-                entry = trade["entry_price"]
-                current_sl = live.stop_level or trade.get("stop_level") or entry
-                profit_target = 5.0  # will be overridden by config each poll
-                distance = current_sl - entry
-                trail_locks = max(0, int(distance / profit_target)) if distance > 0 else 0
-
                 self._positions[deal_id] = TrackedPosition(
                     deal_id=deal_id,
                     epic=trade["epic"],
                     direction=trade["direction"],
                     size=trade["size"],
-                    entry_price=entry,
-                    stop_level=current_sl,
+                    entry_price=trade["entry_price"],
+                    stop_level=trade.get("stop_level"),
+                    profit_level=trade.get("profit_level"),
                     db_id=trade["id"],
                     opened_at=trade["opened_at"],
                     last_upl=live.upl,
-                    trail_locks=trail_locks,
                 )
-                logger.info(f"Recovered position {deal_id} for {trade['epic']} (trail_locks={trail_locks})")
+                logger.info(f"Recovered position {deal_id} for {trade['epic']}")
             else:
-                pnl = self._calculate_pnl_from_levels(trade)
+                pnl = self._estimate_pnl(trade)
                 exit_reason = "TP_HIT" if pnl >= 0 else "SL_HIT"
-                exit_price = trade.get("stop_level") or trade["entry_price"]
                 await self._store.save_trade_close(
                     deal_id=deal_id,
-                    exit_price=exit_price,
+                    exit_price=trade.get("profit_level") or trade.get("stop_level") or trade["entry_price"],
                     pnl=pnl,
                     exit_reason="SERVER_CLOSE",
                 )
+                self.safety.record_trade(pnl)
                 await self._store.log_audit(
                     trade["epic"], "SERVER_CLOSE",
-                    {"deal_id": deal_id, "pnl": pnl, "note": "closed while bot was down"},
+                    {"deal_id": deal_id, "pnl": pnl},
                     pnl=pnl,
                 )
-                self.safety.record_trade(pnl)
-                logger.warning(f"Position {deal_id} closed server-side, estimated pnl={pnl:.2f}")
+                logger.warning(f"Position {deal_id} closed server-side, pnl={pnl:.2f}")
 
-    # -- open position (NO profitLevel) --------------------------------------
+    # -- open position -------------------------------------------------------
 
     async def open_position(self, signal: EntrySignal) -> TrackedPosition | None:
-        # Calculate SL from a preliminary price for the order
-        # (will be corrected after fill)
-        preliminary_sl = round(signal.entry_price - signal.sl_distance, 2)
-
         try:
             confirm = await self._client.open_position(
                 epic=signal.epic,
                 direction=signal.direction,
                 size=signal.size,
-                stop_level=preliminary_sl,
-                profit_level=None,  # NO TP — we trail instead
+                stop_level=signal.stop_level,
+                profit_level=signal.profit_level,
             )
         except OrderError as e:
             logger.error(f"Order rejected for {signal.epic}: {e.reason}")
@@ -132,9 +128,6 @@ class PositionTracker:
             return None
 
         self._last_entry_time[signal.epic] = time.time()
-
-        # Calculate correct SL from ACTUAL fill price
-        actual_sl = round(confirm.level - signal.sl_distance, 2)
 
         # Reconcile deal_id
         actual_deal_id = confirm.deal_id
@@ -152,24 +145,14 @@ class PositionTracker:
         except Exception:
             pass
 
-        # Only correct SL if it gives MORE room (moves SL further from entry)
-        # Never tighten — if fill was above candle price, preliminary SL is safer
-        if actual_sl < preliminary_sl:
-            try:
-                await self._client.update_position_fast(actual_deal_id, actual_sl)
-            except Exception:
-                actual_sl = preliminary_sl  # keep preliminary if update fails
-        else:
-            actual_sl = preliminary_sl  # keep the lower (safer) SL
-
         db_id = await self._store.save_trade_open(
             epic=signal.epic,
             deal_id=actual_deal_id,
             direction=signal.direction,
             size=confirm.size,
             entry_price=confirm.level,
-            stop_level=actual_sl,
-            profit_level=None,
+            stop_level=signal.stop_level,
+            profit_level=signal.profit_level,
         )
 
         tracked = TrackedPosition(
@@ -178,7 +161,8 @@ class PositionTracker:
             direction=signal.direction,
             size=confirm.size,
             entry_price=confirm.level,
-            stop_level=actual_sl,
+            stop_level=signal.stop_level,
+            profit_level=signal.profit_level,
             db_id=db_id,
         )
         self._positions[actual_deal_id] = tracked
@@ -189,23 +173,29 @@ class PositionTracker:
                 "deal_id": actual_deal_id,
                 "price": confirm.level,
                 "size": confirm.size,
-                "sl": actual_sl,
+                "sl": signal.stop_level,
+                "tp": signal.profit_level,
             },
         )
         logger.info(
             f"Opened {signal.direction} {signal.epic} x{confirm.size} @ {confirm.level} "
-            f"SL={actual_sl} (trailing mode, no TP)"
+            f"SL={signal.stop_level} TP={signal.profit_level}"
         )
         return tracked
 
-    # -- check positions: trail SL + detect server-side closes ---------------
+    # -- check positions: detect server-side closes (TP/SL hit) --------------
 
     async def check_positions(
         self,
         epic: str,
         profit_target: float,
-        num_contracts: float,
+        max_positions: int,
+        scalper,
+        current_candle,
+        history,
         config: dict,
+        symbol_cfg: dict,
+        min_stop_distance: float,
     ) -> None:
         live_positions = await self._client.get_positions()
         live_map = {p.deal_id: p for p in live_positions}
@@ -218,111 +208,88 @@ class PositionTracker:
 
             live = live_map.get(deal_id)
             if live is None:
-                # Position closed server-side (SL hit after trailing)
+                # Position closed server-side (TP or SL hit by Capital.com)
                 pnl = tracked.last_upl
-                if pnl == 0 and tracked.trail_locks > 0:
-                    # We had locked profit — SL was at entry + (trail_locks * tp_distance)
-                    tp_distance = profit_target / num_contracts
-                    pnl = tracked.trail_locks * tp_distance * tracked.size
-                elif pnl == 0:
-                    pnl = self._calculate_pnl_from_sl(tracked)
+                if pnl == 0:
+                    pnl = self._estimate_pnl_tracked(tracked)
 
-                exit_reason = "TRAIL_SL" if tracked.trail_locks > 0 else "SL_HIT"
-                exit_price = tracked.stop_level or tracked.entry_price
+                exit_reason = "TP_HIT" if pnl >= 0 else "SL_HIT"
+                exit_price = (
+                    tracked.profit_level if pnl >= 0 else tracked.stop_level
+                ) or tracked.entry_price
+
                 await self._store.save_trade_close(
                     deal_id=deal_id,
                     exit_price=exit_price,
                     pnl=pnl,
                     exit_reason=exit_reason,
                 )
+                self.safety.record_trade(pnl)
                 await self._store.log_audit(
                     epic, exit_reason,
-                    {"deal_id": deal_id, "pnl": pnl, "trail_locks": tracked.trail_locks},
+                    {"deal_id": deal_id, "pnl": pnl},
                     pnl=pnl,
                 )
-                self.safety.record_trade(pnl)
                 to_remove.append(deal_id)
-                logger.info(
-                    f"{exit_reason} {epic} deal={deal_id} pnl={pnl:.2f} "
-                    f"(trailed {tracked.trail_locks} times)"
-                )
+
+                # Check if this was a fast TP — reopen instantly
+                seconds_held = time.time() - tracked.opened_ts
+                if exit_reason == "TP_HIT" and seconds_held <= FAST_TP_THRESHOLD:
+                    logger.info(
+                        f"FAST TP {epic} deal={deal_id} pnl={pnl:.2f} "
+                        f"in {seconds_held:.1f}s — reopening instantly"
+                    )
+                    if self.can_open_fast(epic, max_positions):
+                        num_contracts = symbol_cfg.get("num_contracts") or config.get("num_contracts", 1)
+                        pt = symbol_cfg.get("profit_target") or config.get("profit_target", 5)
+                        sl = symbol_cfg.get("stop_loss") or config.get("stop_loss", 10)
+                        ema_on = config.get("ema_filter_on", False)
+                        ema_period = config.get("ema_period", 5)
+
+                        signal = scalper.check_entry(
+                            epic=epic,
+                            current_candle=current_candle,
+                            history=history,
+                            num_contracts=num_contracts,
+                            profit_target=pt,
+                            stop_loss=sl,
+                            min_stop_distance=min_stop_distance,
+                            ema_filter_on=ema_on,
+                            ema_period=ema_period,
+                        )
+                        if signal:
+                            await self.open_position(signal)
+                            await self._store.log_audit(
+                                epic, "FAST_REOPEN",
+                                {"seconds_held": round(seconds_held, 1), "pnl": pnl},
+                            )
+                else:
+                    logger.info(
+                        f"{exit_reason} {epic} deal={deal_id} pnl={pnl:.2f} "
+                        f"held {seconds_held:.0f}s"
+                    )
                 continue
 
             # Update last known UPL
             tracked.last_upl = live.upl
 
-            # --- Single unified SL logic: breakeven + trail in one decision ---
-            tp_distance = profit_target / num_contracts
-            price_above_entry = live.open_level + (live.upl / live.size) - tracked.entry_price if live.size else 0
-            expected_locks = int(price_above_entry / tp_distance)
-
-            # Determine best SL level right now
-            new_sl: float | None = None
-            event: str = ""
-
-            if expected_locks > tracked.trail_locks:
-                # Full trail jump(s) — go straight to the highest lock
-                new_sl = round(tracked.entry_price + (expected_locks * tp_distance), 2)
-                event = "TRAIL_MOVE"
-            elif not tracked.breakeven_hit and live.upl >= (profit_target / 2.0):
-                # Between half-target and first full lock — breakeven only
-                new_sl = round(tracked.entry_price, 2)
-                event = "BREAKEVEN"
-
-            if new_sl is not None and new_sl > (tracked.stop_level or 0):
-                try:
-                    actual_sl = await self._client.update_position_fast(
-                        deal_id=deal_id,
-                        stop_level=new_sl,
-                    )
-                    old_locks = tracked.trail_locks
-                    if event == "TRAIL_MOVE":
-                        # Calculate actual locks based on what Capital.com accepted
-                        actual_distance = actual_sl - tracked.entry_price
-                        actual_locks = max(0, int(actual_distance / tp_distance))
-                        tracked.trail_locks = actual_locks if actual_locks > 0 else expected_locks
-                    tracked.breakeven_hit = True
-                    tracked.stop_level = actual_sl
-                    locked_profit = tracked.trail_locks * profit_target
-
-                    await self._store.log_audit(
-                        epic, event,
-                        {
-                            "deal_id": deal_id,
-                            "old_locks": old_locks,
-                            "new_locks": tracked.trail_locks,
-                            "new_sl": new_sl,
-                            "locked_profit": locked_profit,
-                            "upl": live.upl,
-                        },
-                    )
-                    if event == "TRAIL_MOVE":
-                        logger.info(
-                            f"TRAIL {epic} deal={deal_id}: "
-                            f"SL → {new_sl} (locked ${locked_profit:.2f}, "
-                            f"{old_locks} → {tracked.trail_locks} jumps, UPL=${live.upl:.2f})"
-                        )
-                    else:
-                        logger.info(
-                            f"BREAKEVEN {epic} deal={deal_id}: "
-                            f"SL → {new_sl} (UPL=${live.upl:.2f})"
-                        )
-                except OrderError as e:
-                    logger.error(f"Failed to update SL for {deal_id}: {e}")
-
         for deal_id in to_remove:
             self._positions.pop(deal_id, None)
 
-    def _calculate_pnl_from_sl(self, tracked: TrackedPosition) -> float:
-        """Estimate P&L from SL level (position was stopped out)."""
-        if tracked.stop_level:
-            return (tracked.stop_level - tracked.entry_price) * tracked.size
+    def _estimate_pnl_tracked(self, tracked: TrackedPosition) -> float:
+        if tracked.profit_level and tracked.stop_level:
+            tp_pnl = (tracked.profit_level - tracked.entry_price) * tracked.size
+            sl_pnl = (tracked.stop_level - tracked.entry_price) * tracked.size
+            if tracked.last_upl > 0:
+                return tp_pnl
+            return sl_pnl
         return 0
 
-    def _calculate_pnl_from_levels(self, trade: dict) -> float:
+    def _estimate_pnl(self, trade: dict) -> float:
         entry = trade.get("entry_price", 0)
         size = trade.get("size", 1)
+        tp = trade.get("profit_level")
         sl = trade.get("stop_level")
-        if sl:
-            return (sl - entry) * size
+        if tp and sl:
+            return (tp - entry) * size
         return 0

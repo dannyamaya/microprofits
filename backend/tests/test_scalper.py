@@ -42,7 +42,8 @@ class TestMomentumScalper:
         assert signal is not None
         assert signal.epic == "US100"
         assert signal.direction == "BUY"
-        assert signal.sl_distance == 10  # stop_loss / num_contracts
+        assert signal.stop_level == 95  # 105 - 10
+        assert signal.profit_level == 110  # 105 + 5
         assert signal.entry_price == 105
 
     def test_no_entry_price_below_prev(self):
@@ -107,8 +108,7 @@ class TestMomentumScalper:
             ema_filter_on=False,
         )
         assert signal is not None
-        # sl_distance should use min_stop_distance (3) instead of 0.5
-        assert signal.sl_distance == 3
+        assert signal.stop_level == 102  # 105 - 3 (min_stop_distance)
 
     def test_two_contracts_halves_distance(self):
         history = _history([100, 101, 102, 103, 104])
@@ -124,7 +124,8 @@ class TestMomentumScalper:
             ema_filter_on=False,
         )
         assert signal is not None
-        assert signal.sl_distance == 5  # 10 / 2 contracts
+        assert signal.stop_level == 100  # 105 - (10/2)
+        assert signal.profit_level == 110  # 105 + (10/2)
         assert signal.size == 2
 
     def test_empty_history(self):
