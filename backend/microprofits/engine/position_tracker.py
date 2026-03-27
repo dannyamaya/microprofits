@@ -145,14 +145,38 @@ class PositionTracker:
         except Exception:
             pass
 
+        # Recalculate SL/TP from actual fill price
+        fill = confirm.level
+        sl_distance = signal.entry_price - signal.stop_level
+        tp_distance = signal.profit_level - signal.entry_price
+        correct_sl = round(fill - sl_distance, 2)
+        correct_tp = round(fill + tp_distance, 2)
+
+        # Correct SL/TP if they differ from preliminary
+        if correct_sl != signal.stop_level or correct_tp != signal.profit_level:
+            try:
+                await self._client.update_position(
+                    deal_id=actual_deal_id,
+                    stop_level=correct_sl,
+                    profit_level=correct_tp,
+                )
+                logger.info(
+                    f"Corrected SL/TP from fill: SL {signal.stop_level}→{correct_sl}, "
+                    f"TP {signal.profit_level}→{correct_tp}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to correct SL/TP: {e}, keeping preliminary")
+                correct_sl = signal.stop_level
+                correct_tp = signal.profit_level
+
         db_id = await self._store.save_trade_open(
             epic=signal.epic,
             deal_id=actual_deal_id,
             direction=signal.direction,
             size=confirm.size,
-            entry_price=confirm.level,
-            stop_level=signal.stop_level,
-            profit_level=signal.profit_level,
+            entry_price=fill,
+            stop_level=correct_sl,
+            profit_level=correct_tp,
         )
 
         tracked = TrackedPosition(
@@ -160,9 +184,9 @@ class PositionTracker:
             epic=signal.epic,
             direction=signal.direction,
             size=confirm.size,
-            entry_price=confirm.level,
-            stop_level=signal.stop_level,
-            profit_level=signal.profit_level,
+            entry_price=fill,
+            stop_level=correct_sl,
+            profit_level=correct_tp,
             db_id=db_id,
         )
         self._positions[actual_deal_id] = tracked
@@ -171,15 +195,15 @@ class PositionTracker:
             signal.epic, "ENTRY",
             {
                 "deal_id": actual_deal_id,
-                "price": confirm.level,
+                "price": fill,
                 "size": confirm.size,
-                "sl": signal.stop_level,
-                "tp": signal.profit_level,
+                "sl": correct_sl,
+                "tp": correct_tp,
             },
         )
         logger.info(
-            f"Opened {signal.direction} {signal.epic} x{confirm.size} @ {confirm.level} "
-            f"SL={signal.stop_level} TP={signal.profit_level}"
+            f"Opened {signal.direction} {signal.epic} x{confirm.size} @ {fill} "
+            f"SL={correct_sl} TP={correct_tp}"
         )
         return tracked
 
