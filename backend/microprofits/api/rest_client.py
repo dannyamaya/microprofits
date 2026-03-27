@@ -222,7 +222,12 @@ class RestClient:
         body = {"stopLevel": round(stop_level, 2), "guaranteedStop": False}
         resp = await self._request("PUT", f"/api/v1/positions/{deal_id}", json=body)
         if resp.status_code != 200:
-            raise OrderError("", "FAILED", f"SL update rejected: {resp.status_code}")
+            body_text = ""
+            try:
+                body_text = resp.text
+            except Exception:
+                pass
+            raise OrderError("", "FAILED", f"SL update rejected: {resp.status_code} {body_text}")
 
     # -- confirmation --------------------------------------------------------
 
