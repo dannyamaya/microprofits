@@ -27,6 +27,8 @@ services:
       - "3000:80"
     depends_on:
       - backend
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
   db:
