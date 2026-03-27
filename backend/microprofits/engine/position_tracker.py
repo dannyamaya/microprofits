@@ -30,6 +30,9 @@ class TrackedPosition:
     opened_at: datetime = field(default_factory=datetime.utcnow)
     opened_ts: float = field(default_factory=time.time)
     last_upl: float = 0.0
+    needs_correction: bool = False  # SL/TP not yet corrected from fill price
+    target_sl: float | None = None  # correct SL based on fill
+    target_tp: float | None = None  # correct TP based on fill
 
 
 class PositionTracker:
@@ -153,6 +156,7 @@ class PositionTracker:
         correct_tp = round(fill + tp_distance, 2)
 
         # Correct SL/TP if they differ from preliminary
+        needs_correction = False
         if correct_sl != signal.stop_level or correct_tp != signal.profit_level:
             try:
                 await self._client.update_position(
@@ -165,9 +169,8 @@ class PositionTracker:
                     f"TP {signal.profit_level}→{correct_tp}"
                 )
             except Exception as e:
-                logger.warning(f"Failed to correct SL/TP: {e}, keeping preliminary")
-                correct_sl = signal.stop_level
-                correct_tp = signal.profit_level
+                logger.warning(f"Failed to correct SL/TP: {e}, will retry next poll")
+                needs_correction = True
 
         db_id = await self._store.save_trade_open(
             epic=signal.epic,
@@ -188,6 +191,9 @@ class PositionTracker:
             stop_level=correct_sl,
             profit_level=correct_tp,
             db_id=db_id,
+            needs_correction=needs_correction,
+            target_sl=correct_sl if needs_correction else None,
+            target_tp=correct_tp if needs_correction else None,
         )
         self._positions[actual_deal_id] = tracked
 
@@ -231,6 +237,25 @@ class PositionTracker:
                 continue
 
             live = live_map.get(deal_id)
+
+            # Retry SL/TP correction if previous attempt failed
+            if live is not None and tracked.needs_correction and tracked.target_sl and tracked.target_tp:
+                try:
+                    await self._client.update_position(
+                        deal_id=deal_id,
+                        stop_level=tracked.target_sl,
+                        profit_level=tracked.target_tp,
+                    )
+                    tracked.stop_level = tracked.target_sl
+                    tracked.profit_level = tracked.target_tp
+                    tracked.needs_correction = False
+                    logger.info(
+                        f"Corrected SL/TP (retry): deal={deal_id} "
+                        f"SL={tracked.target_sl} TP={tracked.target_tp}"
+                    )
+                except Exception as e:
+                    logger.warning(f"SL/TP correction retry failed for {deal_id}: {e}")
+
             if live is None:
                 # Position closed server-side (TP or SL hit by Capital.com)
                 pnl = tracked.last_upl
