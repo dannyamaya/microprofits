@@ -14,9 +14,8 @@ class EntrySignal:
     epic: str
     direction: str
     size: float
-    stop_level: float
-    profit_level: float
-    entry_price: float
+    sl_distance: float  # points below entry
+    entry_price: float  # reference price (candle), actual SL set after fill
 
 
 class MomentumScalper:
@@ -61,14 +60,10 @@ class MomentumScalper:
         if tp_distance < min_stop_distance:
             tp_distance = min_stop_distance
 
-        profit_level = round(current_price + tp_distance, 2)
-        stop_level = round(current_price - sl_distance, 2)
-
         return EntrySignal(
             epic=epic,
             direction="BUY",
             size=num_contracts,
-            stop_level=stop_level,
-            profit_level=profit_level,
+            sl_distance=sl_distance,
             entry_price=current_price,
         )

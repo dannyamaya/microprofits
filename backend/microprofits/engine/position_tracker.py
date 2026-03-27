@@ -110,12 +110,16 @@ class PositionTracker:
     # -- open position (NO profitLevel) --------------------------------------
 
     async def open_position(self, signal: EntrySignal) -> TrackedPosition | None:
+        # Calculate SL from a preliminary price for the order
+        # (will be corrected after fill)
+        preliminary_sl = round(signal.entry_price - signal.sl_distance, 2)
+
         try:
             confirm = await self._client.open_position(
                 epic=signal.epic,
                 direction=signal.direction,
                 size=signal.size,
-                stop_level=signal.stop_level,
+                stop_level=preliminary_sl,
                 profit_level=None,  # NO TP — we trail instead
             )
         except OrderError as e:
@@ -128,6 +132,9 @@ class PositionTracker:
             return None
 
         self._last_entry_time[signal.epic] = time.time()
+
+        # Calculate correct SL from ACTUAL fill price
+        actual_sl = round(confirm.level - signal.sl_distance, 2)
 
         # Reconcile deal_id
         actual_deal_id = confirm.deal_id
@@ -145,13 +152,20 @@ class PositionTracker:
         except Exception:
             pass
 
+        # Update SL to be based on actual fill price (not candle price)
+        if actual_sl != preliminary_sl:
+            try:
+                await self._client.update_position_fast(actual_deal_id, actual_sl)
+            except Exception:
+                pass  # worst case we keep the preliminary SL
+
         db_id = await self._store.save_trade_open(
             epic=signal.epic,
             deal_id=actual_deal_id,
             direction=signal.direction,
             size=confirm.size,
             entry_price=confirm.level,
-            stop_level=signal.stop_level,
+            stop_level=actual_sl,
             profit_level=None,
         )
 
@@ -161,7 +175,7 @@ class PositionTracker:
             direction=signal.direction,
             size=confirm.size,
             entry_price=confirm.level,
-            stop_level=signal.stop_level,
+            stop_level=actual_sl,
             db_id=db_id,
         )
         self._positions[actual_deal_id] = tracked
@@ -172,12 +186,12 @@ class PositionTracker:
                 "deal_id": actual_deal_id,
                 "price": confirm.level,
                 "size": confirm.size,
-                "sl": signal.stop_level,
+                "sl": actual_sl,
             },
         )
         logger.info(
             f"Opened {signal.direction} {signal.epic} x{confirm.size} @ {confirm.level} "
-            f"SL={signal.stop_level} (trailing mode, no TP)"
+            f"SL={actual_sl} (trailing mode, no TP)"
         )
         return tracked
 
