@@ -185,7 +185,7 @@ class PositionTracker:
         )
         logger.info(
             f"Opened {signal.direction} {signal.epic} x{confirm.size} @ {fill} "
-            f"SL={correct_sl} TP={correct_tp}"
+            f"SL={signal.stop_level} TP={signal.profit_level}"
         )
         return tracked
 
