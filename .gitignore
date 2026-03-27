@@ -8,3 +8,5 @@ dist/
 *.egg-info/
 .mypy_cache/
 .claude/
+build/
+.pytest_cache/
