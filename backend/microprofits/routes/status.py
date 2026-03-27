@@ -40,7 +40,6 @@ async def get_status(request: Request):
         "uptime_seconds": (datetime.utcnow() - _start_time).total_seconds(),
         "open_positions": len(loop.tracker.open_positions),
         "account": balance_info,
-        "safety": loop.tracker.safety.status(),
     }
 
 

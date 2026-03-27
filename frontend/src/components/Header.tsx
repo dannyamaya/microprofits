@@ -30,8 +30,6 @@ export default function Header({ status, onRefresh }: Props) {
     return `${h}h ${m}m`;
   };
 
-  const safety = status.safety;
-
   return (
     <header className="header">
       <div className="header-left">
@@ -39,11 +37,6 @@ export default function Header({ status, onRefresh }: Props) {
         <span className={`status-badge ${enabled ? "on" : "off"}`}>
           {enabled ? "RUNNING" : "STOPPED"}
         </span>
-        {safety?.is_locked && (
-          <span className="status-badge locked">
-            LOCKED {Math.ceil(safety.lock_remaining_seconds / 60)}m
-          </span>
-        )}
       </div>
       <div className="header-center">
         <div className="stat">
@@ -65,12 +58,6 @@ export default function Header({ status, onRefresh }: Props) {
         <div className="stat">
           <span className="label">Uptime</span>
           <span className="value">{fmtUptime(status.uptime_seconds)}</span>
-        </div>
-        <div className="stat">
-          <span className="label">Losses</span>
-          <span className={`value ${(safety?.consecutive_losses ?? 0) >= 5 ? "negative" : ""}`}>
-            {safety?.consecutive_losses ?? 0}/{safety?.max_consecutive ?? 10}
-          </span>
         </div>
       </div>
       <div className="header-right">
