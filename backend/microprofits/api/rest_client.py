@@ -179,8 +179,37 @@ class RestClient:
         resp = await self._request("POST", "/api/v1/positions", json=body)
         data = resp.json()
         deal_ref = data.get("dealReference", "")
+
         if not deal_ref:
-            raise OrderError("", "FAILED", f"No dealReference: {data}")
+            error_code = data.get("errorCode", "")
+
+            # Capital.com tells us the allowed SL/TP limits — adjust and retry
+            adjusted = False
+            if "stoploss.maxvalue" in error_code:
+                try:
+                    max_sl = float(error_code.split(": ")[1])
+                    body["stopLevel"] = round(max_sl - 1, 2)
+                    adjusted = True
+                    logger.info(f"SL adjusted to {body['stopLevel']} (max was {max_sl})")
+                except (ValueError, IndexError):
+                    pass
+            if "takeprofit.minvalue" in error_code:
+                try:
+                    min_tp = float(error_code.split(": ")[1])
+                    body["profitLevel"] = round(min_tp + 1, 2)
+                    adjusted = True
+                    logger.info(f"TP adjusted to {body['profitLevel']} (min was {min_tp})")
+                except (ValueError, IndexError):
+                    pass
+
+            if adjusted:
+                resp = await self._request("POST", "/api/v1/positions", json=body)
+                data = resp.json()
+                deal_ref = data.get("dealReference", "")
+
+            if not deal_ref:
+                raise OrderError("", "FAILED", f"No dealReference: {data}")
+
         return await self._confirm_deal(deal_ref)
 
     async def close_position(

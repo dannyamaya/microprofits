@@ -179,8 +179,8 @@ class PositionTracker:
                 "deal_id": actual_deal_id,
                 "price": fill,
                 "size": confirm.size,
-                "sl": correct_sl,
-                "tp": correct_tp,
+                "sl": signal.stop_level,
+                "tp": signal.profit_level,
             },
         )
         logger.info(
