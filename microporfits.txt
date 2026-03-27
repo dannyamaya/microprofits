@@ -1,0 +1,22 @@
+Microprofits its a ultra aggresive scalping bot integrated with capital.com
+
+Goal: Gain x usd fast, if price increasing up open a new postion but close the first position
+
+Parameters that can be modified from frontend
+    profit target: example 5usd
+    max number of active positions
+    number of contracts
+    global off on switch
+    global off on per symbol, we are going to start with US100 for now
+
+
+
+Entry Strategy: Use the candle polling Pattern, detect a price increasing momentum comparing the current candle with the previous one, you dont have to wait to closed candles if the current candle overpass the previous one thats our entry
+
+Stop Loss and Take Profit Strategy: Stop Loss -10usd - Profit taker +5usd  straight forward
+
+Scaling strategy: if position is increasing beyond 5usd you instantly take the 5usd and create a new position (up to the max allowed) this are not legs are new positions independant.
+
+
+Tech stack
+Docker, everything should run on a docker container
