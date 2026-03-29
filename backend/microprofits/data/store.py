@@ -61,6 +61,7 @@ class Store:
                     stop_loss       DOUBLE PRECISION,
                     num_contracts   DOUBLE PRECISION,
                     max_positions   INT,
+                    trail_pct       DOUBLE PRECISION DEFAULT 0,
                     updated_at      TIMESTAMPTZ DEFAULT NOW()
                 );
 
@@ -143,6 +144,11 @@ class Store:
                     "ALTER TABLE symbol_config ADD COLUMN account_id TEXT DEFAULT ''"
                 )
                 logger.info("Migrated: added account_id column to symbol_config")
+            if "trail_pct" not in sym_existing:
+                await conn.execute(
+                    "ALTER TABLE symbol_config ADD COLUMN trail_pct DOUBLE PRECISION DEFAULT 0"
+                )
+                logger.info("Migrated: added trail_pct column to symbol_config")
 
     async def _seed_defaults(self) -> None:
         async with self.pool.acquire() as conn:

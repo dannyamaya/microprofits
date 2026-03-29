@@ -321,6 +321,31 @@ body {
   border-color: var(--blue);
 }
 
+.trail-pct-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.trail-pct-input {
+  width: 50px;
+  padding: 3px 6px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 11px;
+  text-align: center;
+}
+
+.trail-pct-input:focus {
+  outline: none;
+  border-color: var(--blue);
+}
+
 /* Stats */
 .stats-grid {
   display: grid;

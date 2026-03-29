@@ -55,6 +55,12 @@ export default function ConfigPanel({ config, onRefresh }: Props) {
     setSymbols(updated);
   };
 
+  const changeTrailPct = async (epic: string, trail_pct: number) => {
+    await updateSymbol(epic, { trail_pct });
+    const updated = await getSymbols();
+    setSymbols(updated);
+  };
+
   return (
     <div className="panel config-panel">
       <h2>Configuration</h2>
@@ -148,6 +154,18 @@ export default function ConfigPanel({ config, onRefresh }: Props) {
               <option value="scalper">Scalper</option>
               <option value="asian_range">Asian Range</option>
             </select>
+            <label className="trail-pct-label">
+              Trail %
+              <input
+                type="number"
+                className="trail-pct-input"
+                min="0"
+                max="80"
+                step="5"
+                value={s.trail_pct || 0}
+                onChange={(e) => changeTrailPct(s.epic, Number(e.target.value))}
+              />
+            </label>
             <button
               className={`btn btn-sm ${s.enabled ? "btn-on" : "btn-off"}`}
               onClick={() => toggleSymbol(s.epic, !s.enabled)}

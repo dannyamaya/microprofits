@@ -11,6 +11,7 @@ from microprofits.engine.position_tracker import PositionTracker
 from microprofits.strategy.candle_history import CandleHistory
 from microprofits.strategy.scalper import MomentumScalper
 from microprofits.strategy.asian_range import AsianRangeBreakout
+from microprofits.engine.pct_trailer import PctTrailer
 
 
 class ScalperLoop:
@@ -27,6 +28,7 @@ class ScalperLoop:
 
         self._histories: dict[str, CandleHistory] = {}
         self._min_stop_distances: dict[str, float] = {}
+        self._pct_trailer = PctTrailer(store)
         self._running = False
         self._task: asyncio.Task | None = None
 
@@ -72,11 +74,18 @@ class ScalperLoop:
         for sym in symbols:
             await self._init_epic(sym["epic"], sym.get("strategy", "scalper"), sym.get("account_id", ""))
 
+        # Register all clients with the PctTrailer
+        self._pct_trailer.register_client("", self.client)  # default account
+        for acct_id, acct_client in self._clients.items():
+            self._pct_trailer.register_client(acct_id, acct_client)
+        await self._pct_trailer.start()
+
         self._task = asyncio.create_task(self._run())
         logger.info("Scalper loop started")
 
     async def stop(self) -> None:
         self._running = False
+        await self._pct_trailer.stop()
         if self._task:
             self._task.cancel()
             try:

@@ -31,6 +31,7 @@ class SymbolConfigUpdate(BaseModel):
     stop_loss: float | None = None
     num_contracts: float | None = None
     max_positions: int | None = None
+    trail_pct: float | None = None
 
 
 @router.get("/config")
