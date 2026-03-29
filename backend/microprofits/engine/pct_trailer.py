@@ -95,6 +95,9 @@ class PctTrailer:
         for epic, (_, account_id) in trail_map.items():
             account_epics.setdefault(account_id, []).append(epic)
 
+        # Collect all live deal_ids across all accounts for cleanup
+        all_live_deal_ids: set[str] = set()
+
         # For each account, fetch positions and process
         for account_id, epics in account_epics.items():
             client = self._clients.get(account_id)
@@ -107,21 +110,18 @@ class PctTrailer:
                 logger.error(f"PctTrailer: failed to get positions for account {account_id}: {e}")
                 continue
 
-            # Build set of live deal_ids for cleanup
-            live_deal_ids = {p.deal_id for p in live_positions}
-
             for pos in live_positions:
+                all_live_deal_ids.add(pos.deal_id)
                 if pos.epic not in trail_map:
                     continue
 
                 trail_pct, _ = trail_map[pos.epic]
                 await self._process_position(client, pos, trail_pct)
 
-            # Clean up trail state for positions that are gone
-            gone = [did for did in list(self._trail.keys())
-                    if did not in live_deal_ids]
-            for did in gone:
-                self._trail.pop(did, None)
+        # Clean up trail state for positions that no longer exist
+        gone = [did for did in self._trail if did not in all_live_deal_ids]
+        for did in gone:
+            self._trail.pop(did, None)
 
     async def _process_position(
         self, client: RestClient, pos, trail_pct: float
