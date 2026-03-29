@@ -6,6 +6,7 @@ import PositionTable from "./components/PositionTable.tsx";
 import PnlSummary from "./components/PnlSummary.tsx";
 import TradeHistory from "./components/TradeHistory.tsx";
 import Heatmap from "./components/Heatmap.tsx";
+import SchedulePanel from "./components/SchedulePanel.tsx";
 import "./components/styles.css";
 
 export default function App() {
@@ -54,6 +55,7 @@ export default function App() {
         <ConfigPanel config={config} onRefresh={refresh} />
         <PnlSummary stats={stats} />
       </div>
+      <SchedulePanel />
       <PositionTable positions={positions} />
       <Heatmap data={heatmap} />
       <TradeHistory trades={trades} />

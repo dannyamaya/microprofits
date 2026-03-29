@@ -25,6 +25,8 @@ class BotConfigUpdate(BaseModel):
 
 class SymbolConfigUpdate(BaseModel):
     enabled: bool | None = None
+    strategy: str | None = None
+    account_id: str | None = None
     profit_target: float | None = None
     stop_loss: float | None = None
     num_contracts: float | None = None

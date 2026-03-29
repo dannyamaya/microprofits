@@ -13,9 +13,10 @@ REFRESH_BEFORE_EXPIRY = 480  # 8 minutes — refresh before 10-min expiry
 
 
 class SessionManager:
-    def __init__(self) -> None:
+    def __init__(self, account_id: str = "") -> None:
         self._session: Session | None = None
         self._last_used: float = 0.0
+        self._account_id = account_id
 
     @property
     def is_expired(self) -> bool:
@@ -63,20 +64,21 @@ class SessionManager:
         self._last_used = time.time()
         logger.info("Authenticated successfully")
 
-        # Switch account if specified
-        if settings.capital_account_id:
-            await self._switch_account(client)
+        # Switch account if specified (explicit override > settings)
+        target_account = self._account_id or settings.capital_account_id
+        if target_account:
+            await self._switch_account(client, target_account)
 
         return self._session
 
-    async def _switch_account(self, client: httpx.AsyncClient) -> None:
+    async def _switch_account(self, client: httpx.AsyncClient, account_id: str) -> None:
         resp = await client.put(
             f"{settings.base_url}/api/v1/session",
             headers={**self.headers, "Content-Type": "application/json"},
-            json={"accountId": settings.capital_account_id},
+            json={"accountId": account_id},
         )
         if resp.status_code == 200:
-            logger.info(f"Switched to account {settings.capital_account_id}")
+            logger.info(f"Switched to account {account_id}")
         else:
             logger.warning(f"Failed to switch account: {resp.status_code}")
 

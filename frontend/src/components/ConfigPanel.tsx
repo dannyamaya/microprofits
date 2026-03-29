@@ -49,6 +49,12 @@ export default function ConfigPanel({ config, onRefresh }: Props) {
     setSymbols(updated);
   };
 
+  const changeStrategy = async (epic: string, strategy: string) => {
+    await updateSymbol(epic, { strategy });
+    const updated = await getSymbols();
+    setSymbols(updated);
+  };
+
   return (
     <div className="panel config-panel">
       <h2>Configuration</h2>
@@ -134,6 +140,14 @@ export default function ConfigPanel({ config, onRefresh }: Props) {
         {symbols.map((s) => (
           <div key={s.epic} className="symbol-row">
             <span className="symbol-epic">{s.epic}</span>
+            <select
+              className="strategy-select"
+              value={s.strategy || "scalper"}
+              onChange={(e) => changeStrategy(s.epic, e.target.value)}
+            >
+              <option value="scalper">Scalper</option>
+              <option value="asian_range">Asian Range</option>
+            </select>
             <button
               className={`btn btn-sm ${s.enabled ? "btn-on" : "btn-off"}`}
               onClick={() => toggleSymbol(s.epic, !s.enabled)}

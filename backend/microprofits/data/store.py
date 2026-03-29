@@ -55,6 +55,8 @@ class Store:
                 CREATE TABLE IF NOT EXISTS symbol_config (
                     epic            TEXT PRIMARY KEY,
                     enabled         BOOLEAN DEFAULT TRUE,
+                    strategy        TEXT DEFAULT 'scalper',
+                    account_id      TEXT DEFAULT '',
                     profit_target   DOUBLE PRECISION,
                     stop_loss       DOUBLE PRECISION,
                     num_contracts   DOUBLE PRECISION,
@@ -126,6 +128,22 @@ class Store:
                 """)
                 logger.info("Migrated: added safety columns to bot_config")
 
+            # Migrate symbol_config: add strategy column
+            sym_cols = await conn.fetch(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = 'symbol_config'"
+            )
+            sym_existing = {r["column_name"] for r in sym_cols}
+            if "strategy" not in sym_existing:
+                await conn.execute(
+                    "ALTER TABLE symbol_config ADD COLUMN strategy TEXT DEFAULT 'scalper'"
+                )
+                logger.info("Migrated: added strategy column to symbol_config")
+            if "account_id" not in sym_existing:
+                await conn.execute(
+                    "ALTER TABLE symbol_config ADD COLUMN account_id TEXT DEFAULT ''"
+                )
+                logger.info("Migrated: added account_id column to symbol_config")
+
     async def _seed_defaults(self) -> None:
         async with self.pool.acquire() as conn:
             exists = await conn.fetchval("SELECT 1 FROM bot_config WHERE id = 1")
@@ -138,9 +156,18 @@ class Store:
             )
             if not exists:
                 await conn.execute(
-                    "INSERT INTO symbol_config (epic, enabled) VALUES ('US100', TRUE)"
+                    "INSERT INTO symbol_config (epic, enabled, strategy) VALUES ('US100', TRUE, 'scalper')"
                 )
                 logger.info("Seeded US100 symbol config")
+
+            exists = await conn.fetchval(
+                "SELECT 1 FROM symbol_config WHERE epic = 'GOLD'"
+            )
+            if not exists:
+                await conn.execute(
+                    "INSERT INTO symbol_config (epic, enabled, strategy, account_id) VALUES ('GOLD', TRUE, 'asian_range', '315701137306366238')"
+                )
+                logger.info("Seeded GOLD (XAUUSD) symbol config with asian_range account")
 
     # -- bot config ----------------------------------------------------------
 

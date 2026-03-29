@@ -38,7 +38,9 @@ async def get_status(request: Request):
         "bot_enabled": config.get("enabled", False),
         "loop_running": loop.is_running,
         "uptime_seconds": (datetime.utcnow() - _start_time).total_seconds(),
-        "open_positions": len(loop.tracker.open_positions),
+        "open_positions": len(loop.tracker.open_positions) + sum(
+            len(t.open_positions) for t in loop._trackers.values()
+        ),
         "account": balance_info,
     }
 
@@ -65,21 +67,26 @@ async def flatten_all(request: Request):
     # Disable bot
     await store.update_bot_config(enabled=False)
 
-    # Close all tracked positions
+    # Close all tracked positions (default tracker + per-account trackers)
     closed = 0
-    for pos in list(loop.tracker.open_positions):
-        try:
-            await loop.client.close_position(pos.deal_id)
-            await store.save_trade_close(
-                deal_id=pos.deal_id,
-                exit_price=pos.entry_price,
-                pnl=0,
-                exit_reason="FLATTEN",
-            )
-            await store.log_audit(pos.epic, "FLATTEN", {"deal_id": pos.deal_id})
-            loop.tracker._positions.pop(pos.deal_id, None)
-            closed += 1
-        except Exception:
-            pass
+    all_trackers = [(loop.tracker, loop.client)]
+    for acct_id, tracker in loop._trackers.items():
+        all_trackers.append((tracker, loop._clients[acct_id]))
+
+    for tracker, client in all_trackers:
+        for pos in list(tracker.open_positions):
+            try:
+                await client.close_position(pos.deal_id)
+                await store.save_trade_close(
+                    deal_id=pos.deal_id,
+                    exit_price=pos.entry_price,
+                    pnl=0,
+                    exit_reason="FLATTEN",
+                )
+                await store.log_audit(pos.epic, "FLATTEN", {"deal_id": pos.deal_id})
+                tracker._positions.pop(pos.deal_id, None)
+                closed += 1
+            except Exception:
+                pass
 
     return {"status": "flattened", "positions_closed": closed}

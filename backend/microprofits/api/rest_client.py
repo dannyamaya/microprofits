@@ -28,9 +28,10 @@ CONFIRM_DELAY = 1.0
 
 
 class RestClient:
-    def __init__(self) -> None:
+    def __init__(self, account_id: str = "") -> None:
         self._client = httpx.AsyncClient(timeout=30.0)
-        self._session = SessionManager()
+        self._session = SessionManager(account_id=account_id)
+        self.account_id = account_id
 
     async def start(self) -> None:
         await self._session.authenticate(self._client)

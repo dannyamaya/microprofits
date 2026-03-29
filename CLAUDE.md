@@ -1,12 +1,14 @@
 # Microprofits
 
-Aggressive US100 scalping bot with trailing stop loss, integrated with Capital.com REST API.
+Multi-strategy trading bot integrated with Capital.com REST API. Supports per-symbol strategy selection from the dashboard.
 
-## What It Does
+## Strategies
+
+### 1. Momentum Scalper (US100)
 
 Detects upward momentum on 1-minute candles, opens BUY positions with SL only (no TP), then trails the SL up in profit_target increments as price runs. Breakeven protection kicks in at half the profit target.
 
-### Trail Sequence (profit_target = $5)
+#### Trail Sequence (profit_target = $5)
 
 ```
 Entry @ 19,580       SL = 19,575  (-$5)      Trail: —
@@ -17,11 +19,41 @@ UPL >= $10.00   →    SL = 19,590  (+$10)     Trail: 2x
 Price reverses  →    SL hit at last lock level
 ```
 
-### Entry Logic
+#### Entry Logic
 
 1. Current candle price > previous closed candle close
 2. Optional EMA slope filter (switchable from dashboard)
 3. Entry cooldown between positions (configurable, default 30s)
+
+### 2. Asian Range Breakout (GOLD / XAUUSD)
+
+Marks the high/low of the Asian session (00:00–07:00 UTC), then trades the breakout at London open (08:00–12:00 UTC). Max 1 trade per day.
+
+#### How It Works
+
+```
+Asian session (00:00–07:00 UTC):  Record HIGH and LOW
+London open (08:00 UTC):
+  - Price > Asian HIGH → BUY
+  - Price < Asian LOW  → SELL
+  - Otherwise          → no trade
+
+SL = opposite end of range
+TP = 1.5x range width
+Max 1 trade/day. Skip if range > $25 or < $2.
+```
+
+#### Key Parameters
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| Asian window | 00:00–07:00 UTC | Needs ~30+ candles to establish range |
+| Breakout window | 08:00–12:00 UTC | London open session |
+| TP ratio | 1.5x range | Range width * 1.5 |
+| SL | Opposite end of range | Conservative: full range as stop |
+| Max range skip | $25 | Volatile day filter |
+| Min range skip | $2 | No structure filter |
+| Trades per day | 1 | Resets at midnight UTC |
 
 ## Tech Stack
 
@@ -39,7 +71,7 @@ backend/microprofits/
 ├── data/          PostgreSQL store (trades, audit, config)
 ├── engine/        Main loop + position tracker with trailing SL
 ├── routes/        FastAPI endpoints (status, config, positions, trades, heatmap)
-├── strategy/      Scalper entry logic, EMA filter, candle history
+├── strategy/      Scalper, Asian Range Breakout, EMA filter, candle history
 └── main.py        FastAPI app with lifespan
 
 frontend/src/
@@ -71,18 +103,41 @@ docker-compose up --build
 ## Capital.com API
 
 - **Live URL**: `https://api-capital.backend-capital.com`
-- **Account**: `microprofits` (ID: `315494510724722974`)
 - **Email**: `danny.amaya92@gmail.com`
 - **API key and password**: in `.env` (never committed)
 - **Session tokens**: expire after 10min idle, auto-refresh at 8min
 - **Key gotchas**: see `CAPITAL_COM_API.md` for full reference
+
+### Accounts (per-symbol)
+
+Each symbol can target a different Capital.com account via `account_id` in `symbol_config`. The bot creates independent API sessions per account.
+
+| Account Name | Account ID | Symbol | Strategy | Budget |
+|-------------|-----------|--------|----------|--------|
+| `microprofits` | `315494510724722974` | US100 | scalper | ~$9,900 |
+| `asian_range` | `315701137306366238` | GOLD | asian_range | $1,000 |
+
+Default account (from `.env` `CAPITAL_ACCOUNT_ID`) is `microprofits`. Symbols with a different `account_id` get their own `RestClient` + `PositionTracker`.
+
+## Operating Schedule
+
+The bot needs to be running at different hours depending on the strategy:
+
+| Strategy | UTC Window | Colombia (UTC-5) | Notes |
+|----------|-----------|-------------------|-------|
+| **Scalper (US100)** | 14:30–21:00 | **9:30 AM – 4:00 PM** | US market hours |
+| **Asian Range (GOLD)** | 00:00–12:00 | **7:00 PM – 7:00 AM** | Asian session + London open |
+
+**For running locally:** if you only run Asian Range (GOLD), turn on the PC by **6:30 PM Colombia time** and leave it running until **7:00 AM**. The bot builds the Asian range (7 PM – 2 AM Colombia) and watches for breakouts at London open (3 AM – 7 AM Colombia).
+
+**Practical recommendation:** since the breakout window is 3:00 AM – 7:00 AM Colombia, you can start the bot before going to sleep and it will trade autonomously overnight. The SL/TP are server-side so even if the PC loses connection after entry, the position is protected.
 
 ## Database Tables
 
 | Table | Purpose |
 |-------|---------|
 | `bot_config` | Singleton config row (profit_target, stop_loss, max_positions, etc.) |
-| `symbol_config` | Per-instrument overrides (US100 enabled by default) |
+| `symbol_config` | Per-instrument config + strategy selection (US100=scalper, GOLD=asian_range) |
 | `trades` | Every position open + close with P&L |
 | `audit_log` | All bot decisions (ENTRY, BREAKEVEN, TRAIL_MOVE, SL_HIT, etc.) |
 
@@ -101,7 +156,8 @@ docker-compose up --build
 
 ## Key Design Decisions
 
-- **No profitLevel on orders** — Capital.com would auto-close at TP, defeating the trail. SL only, bot manages exit via trailing.
+- **Per-symbol strategy + account** — each symbol in `symbol_config` has `strategy` and `account_id` fields. The engine creates independent API sessions per account, so GOLD trades on the `asian_range` account ($1,000) and US100 trades on `microprofits` (~$9,900).
+- **No profitLevel on scalper orders** — Capital.com would auto-close at TP, defeating the trail. SL only, bot manages exit via trailing. Asian Range uses TP since it's a fixed-target strategy.
 - **Fire-and-forget SL updates** — `PUT /positions/{id}` without confirmation polling. Saves 1-3s per trail move. Status checked via HTTP response code.
 - **60s backoff on order rejection** — prevents spam when margin is insufficient.
 - **Breakeven at half target** — eliminates full SL risk early. After breakeven, worst case is $0 not -$10.
