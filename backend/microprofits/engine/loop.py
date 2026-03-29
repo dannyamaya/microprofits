@@ -174,8 +174,8 @@ class ScalperLoop:
         tracker = self._get_tracker(account_id)
 
         try:
-            max_bars = 500 if strategy == "asian_range" else 3
-            raw = await client.get_prices(epic, "MINUTE", max_bars=max_bars)
+            # Always fetch only 3 candles per poll cycle (init loads the full history)
+            raw = await client.get_prices(epic, "MINUTE", max_bars=3)
         except Exception as e:
             logger.error(f"Failed to fetch candles for {epic}: {e}")
             return

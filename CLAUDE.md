@@ -163,6 +163,7 @@ The bot needs to be running at different hours depending on the strategy:
 - **Breakeven at half target** — eliminates full SL risk early. After breakeven, worst case is $0 not -$10.
 - **Independent position tracking** — each position has its own `trail_locks` counter, entry price, and SL level.
 - **Crash recovery** — on restart, reconciles DB trades vs live Capital.com positions. SL is server-side so positions are protected even if bot is down.
+- **Rate limit safe** — each symbol fetches only 3 candles per poll (full history only on startup). With 2 symbols at 3s poll: ~4 requests/3s = ~1.3 req/s, well within Capital.com's ~10 req/s safe limit. Each account has its own API session so rate limits are independent.
 
 ## Common Operations
 
