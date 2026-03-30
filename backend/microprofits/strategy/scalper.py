@@ -45,6 +45,7 @@ class MomentumScalper:
         ema_period: int = 5,
         velocity_threshold: float = 0.15,
         velocity_window: int = 3,
+        manual_mode: bool = False,
     ) -> EntrySignal | None:
         current_price = current_candle.close
         now = time.time()
@@ -102,7 +103,7 @@ class MomentumScalper:
             tp_distance = min_stop_distance
 
         stop_level = round(current_price - sl_distance, 2)
-        profit_level = round(current_price + tp_distance, 2)
+        profit_level = None if manual_mode else round(current_price + tp_distance, 2)
 
         return EntrySignal(
             epic=epic,

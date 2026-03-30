@@ -15,6 +15,7 @@ export default function ConfigPanel({ config, onRefresh }: Props) {
   const [emaPeriod, setEmaPeriod] = useState(config.ema_period);
   const [cooldown, setCooldown] = useState(config.entry_cooldown);
   const [velocityThreshold, setVelocityThreshold] = useState(config.velocity_threshold);
+  const [manualMode, setManualMode] = useState(config.manual_mode);
   const [symbols, setSymbols] = useState<any[]>([]);
 
   useEffect(() => {
@@ -26,6 +27,7 @@ export default function ConfigPanel({ config, onRefresh }: Props) {
     setEmaPeriod(config.ema_period);
     setCooldown(config.entry_cooldown);
     setVelocityThreshold(config.velocity_threshold);
+    setManualMode(config.manual_mode);
   }, [config]);
 
   useEffect(() => {
@@ -42,6 +44,7 @@ export default function ConfigPanel({ config, onRefresh }: Props) {
       ema_period: emaPeriod,
       entry_cooldown: cooldown,
       velocity_threshold: velocityThreshold,
+      manual_mode: manualMode,
     });
     onRefresh();
   };
@@ -150,6 +153,15 @@ export default function ConfigPanel({ config, onRefresh }: Props) {
       <p className="config-hint">
         Entry triggers when price moves faster than Velocity threshold (points/second)
       </p>
+
+      <label className="manual-toggle">
+        <input
+          type="checkbox"
+          checked={manualMode}
+          onChange={(e) => setManualMode(e.target.checked)}
+        />
+        Manual Mode (SL only, no trail, no TP — you close positions)
+      </label>
 
       <button className="btn btn-primary" onClick={save}>
         Save Config

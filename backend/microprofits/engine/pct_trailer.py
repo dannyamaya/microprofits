@@ -88,6 +88,11 @@ class PctTrailer:
             await asyncio.sleep(self.INTERVAL)
 
     async def _tick(self) -> None:
+        # Skip trail entirely in manual mode
+        config = await self._store.get_bot_config()
+        if config.get("manual_mode", False):
+            return
+
         symbols = await self._store.list_symbol_configs()
         trail_map: dict[str, tuple[float, str]] = {}  # epic -> (trail_pct, account_id)
         for sym in symbols:

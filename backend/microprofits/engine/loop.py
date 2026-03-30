@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 
 from loguru import logger
 
@@ -142,6 +143,23 @@ class ScalperLoop:
                     await asyncio.sleep(poll_interval)
                     continue
 
+                # Manual mode auto-shutoff: disable bot if no closes in 30 min
+                if config.get("manual_mode", False):
+                    last_close = await self.store.get_last_close_time()
+                    if last_close is not None:
+                        elapsed = (datetime.now(timezone.utc) - last_close).total_seconds()
+                        if elapsed > 1800:  # 30 minutes
+                            logger.warning(
+                                f"MANUAL MODE AUTO-SHUTOFF: no position closed in {elapsed/60:.0f} min. Disabling bot."
+                            )
+                            await self.store.update_bot_config(enabled=False)
+                            await self.store.log_audit(
+                                "SYSTEM", "MANUAL_AUTO_SHUTOFF",
+                                {"minutes_since_last_close": round(elapsed / 60, 1)},
+                            )
+                            await asyncio.sleep(poll_interval)
+                            continue
+
                 symbols = await self.store.list_symbol_configs()
                 for sym in symbols:
                     if not self._running:
@@ -240,6 +258,7 @@ class ScalperLoop:
                 ema_on = config.get("ema_filter_on", False)
                 ema_period = config.get("ema_period", 5)
                 velocity_threshold = config.get("velocity_threshold", 0.15)
+                manual_mode = config.get("manual_mode", False)
                 signal = self.scalper.check_entry(
                     epic=epic,
                     current_candle=current_candle,
@@ -251,6 +270,7 @@ class ScalperLoop:
                     ema_filter_on=ema_on,
                     ema_period=ema_period,
                     velocity_threshold=velocity_threshold,
+                    manual_mode=manual_mode,
                 )
 
             if signal:

@@ -21,6 +21,7 @@ class BotConfigUpdate(BaseModel):
     safety_max_consecutive: int | None = None
     safety_loss_threshold: float | None = None
     safety_cooldown: float | None = None
+    manual_mode: bool | None = None
 
 
 class SymbolConfigUpdate(BaseModel):

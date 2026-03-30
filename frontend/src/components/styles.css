@@ -346,6 +346,42 @@ body {
   border-color: var(--blue);
 }
 
+/* Manual Mode */
+.manual-banner {
+  background: var(--yellow);
+  color: #000;
+  text-align: center;
+  padding: 14px 20px;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  border-radius: 6px;
+  margin-bottom: 16px;
+  animation: pulse-banner 2s ease-in-out infinite;
+}
+
+@keyframes pulse-banner {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+.manual-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  font-size: 13px;
+  color: var(--yellow);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.manual-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
 /* Stats */
 .stats-grid {
   display: grid;

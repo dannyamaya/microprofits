@@ -49,6 +49,7 @@ class Store:
                     safety_max_consecutive INT DEFAULT 10,
                     safety_loss_threshold DOUBLE PRECISION DEFAULT 1.0,
                     safety_cooldown DOUBLE PRECISION DEFAULT 3600.0,
+                    manual_mode     BOOLEAN DEFAULT FALSE,
                     updated_at      TIMESTAMPTZ DEFAULT NOW()
                 );
 
@@ -128,6 +129,11 @@ class Store:
                     ADD COLUMN safety_cooldown DOUBLE PRECISION DEFAULT 3600.0
                 """)
                 logger.info("Migrated: added safety columns to bot_config")
+            if "manual_mode" not in existing:
+                await conn.execute(
+                    "ALTER TABLE bot_config ADD COLUMN manual_mode BOOLEAN DEFAULT FALSE"
+                )
+                logger.info("Migrated: added manual_mode to bot_config")
 
             # Migrate symbol_config: add strategy column
             sym_cols = await conn.fetch(
@@ -267,6 +273,12 @@ class Store:
                 exit_price,
                 pnl,
                 exit_reason,
+            )
+
+    async def get_last_close_time(self) -> datetime | None:
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(
+                "SELECT MAX(closed_at) FROM trades WHERE closed_at IS NOT NULL"
             )
 
     async def get_open_trades(self) -> list[dict]:

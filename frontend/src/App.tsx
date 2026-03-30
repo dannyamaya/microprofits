@@ -51,6 +51,11 @@ export default function App() {
   return (
     <div className="app">
       <Header status={status} onRefresh={refresh} />
+      {config.manual_mode && (
+        <div className="manual-banner">
+          MANUAL MODE — No trail, no TP. You close positions. Auto-shutoff in 30 min without closes.
+        </div>
+      )}
       <div className="grid">
         <ConfigPanel config={config} onRefresh={refresh} />
         <PnlSummary stats={stats} />
