@@ -94,6 +94,8 @@ TRAIL_VIEWER_HTML = """
   .event-SL_HIT { background: #f8514933; color: #f85149; }
   .event-SERVER_CLOSE { background: #d2992233; color: #d29922; }
   .event-TRAIL_CLOSE { background: #23863633; color: #3fb950; }
+  .event-BREAKEVEN { background: #1f6feb33; color: #58a6ff; }
+  .event-PCT_BREAKEVEN { background: #1f6feb33; color: #58a6ff; }
 
   /* Pagination */
   .pagination { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; padding: 8px 0; }
@@ -144,6 +146,7 @@ TRAIL_VIEWER_HTML = """
     <select id="fEvent">
       <option value="">All</option>
       <option value="INIT">INIT</option>
+      <option value="BREAKEVEN">BREAKEVEN</option>
       <option value="TRAIL_MOVE">TRAIL_MOVE</option>
       <option value="EXIT">EXIT</option>
       <option value="TP_HIT">TP_HIT</option>
