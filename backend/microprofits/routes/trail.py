@@ -227,28 +227,26 @@ function friendlyName(dealId) {
   return dealNames[dealId] || dealId.slice(0, 8);
 }
 
-function populateDealPicker(data) {
+function populateDealPicker() {
   const select = document.getElementById('fDealId');
   const current = select.value;
-  const seen = new Set();
-  const options = [];
 
-  // Collect unique deals, oldest INIT first
-  const sorted = [...data].reverse();
-  for (const r of sorted) {
-    if (seen.has(r.deal_id)) continue;
-    seen.add(r.deal_id);
-    const name = friendlyName(r.deal_id);
-    const initRow = sorted.find(x => x.deal_id === r.deal_id && x.event === 'INIT');
-    const date = initRow ? initRow.ts.slice(0, 10) : r.ts.slice(0, 10);
-    options.push({ deal_id: r.deal_id, name, date });
-  }
+  // Build options from dealNames (already deduplicated by buildDealNames)
+  const entries = Object.entries(dealNames)
+    .map(([dealId, name]) => {
+      // Find the earliest timestamp for this deal
+      const rows = allData.filter(r => r.deal_id === dealId);
+      const earliest = rows.length ? rows[rows.length - 1] : null;
+      const date = earliest ? earliest.ts.slice(0, 10) : '';
+      return { dealId, name, date };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   select.innerHTML = '<option value="">All trades</option>';
-  for (const o of options) {
+  for (const e of entries) {
     const opt = document.createElement('option');
-    opt.value = o.deal_id;
-    opt.textContent = `${o.name}  (${o.date})`;
+    opt.value = e.dealId;
+    opt.textContent = `${e.name}  (${e.date})`;
     select.appendChild(opt);
   }
   select.value = current;
@@ -301,7 +299,7 @@ async function fetchAllData() {
   const res = await fetch(`${API}/api/trail/history?limit=5000`);
   allData = await res.json();
   buildDealNames(allData);
-  populateDealPicker(allData);
+  populateDealPicker();
 }
 
 async function loadHistory(page) {
