@@ -1,22 +1,29 @@
 """Percentage-based trailing stop — independent 2-second loop.
 
+Managed 100% by the backend. Does NOT modify SL on Capital.com.
+Capital.com SL stays as the original safety net (worst case).
+
 For each open position whose symbol has trail_pct > 0:
   - Track the peak UPL (high water mark)
-  - When UPL sets a new peak, move SL up by: delta * trail_pct
-  - SL only moves up, never down
-  - No TP — let the trail exit the position
+  - When UPL sets a new peak, raise the internal trail level:
+      trail_level += delta * (trail_pct / 100)
+  - Trail level only goes up, never down
+  - When UPL drops below trail_level → close the position via API
+  - No TP on Capital — the bot decides when to exit
 
 Formula per tick:
     if upl > peak:
         delta = upl - peak
-        new_sl = current_sl + delta * (trail_pct / 100)
+        trail_level = trail_level + delta * (trail_pct / 100)
         peak = upl
+    elif upl <= trail_level and trail_level > initial_sl:
+        CLOSE position
 """
 
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from loguru import logger
 
@@ -28,11 +35,13 @@ from microprofits.data.store import Store
 class TrailState:
     """Per-position trailing state."""
     peak_upl: float = 0.0
-    current_sl: float = 0.0  # in dollar distance from entry (negative = loss)
+    trail_level: float = 0.0    # internal SL in dollar P&L terms
+    initial_sl: float = 0.0     # original SL from Capital (safety net)
+    activated: bool = False      # trail only activates once UPL > 0
 
 
 class PctTrailer:
-    """Monitors open positions every 2s and adjusts SL by trail_pct."""
+    """Monitors open positions every 2s, closes when trail is hit."""
 
     INTERVAL = 2.0  # seconds
 
@@ -55,7 +64,7 @@ class PctTrailer:
             return
         self._running = True
         self._task = asyncio.create_task(self._loop())
-        logger.info("PctTrailer started (2s interval)")
+        logger.info("PctTrailer started (2s interval, backend-managed)")
 
     async def stop(self) -> None:
         self._running = False
@@ -79,7 +88,6 @@ class PctTrailer:
             await asyncio.sleep(self.INTERVAL)
 
     async def _tick(self) -> None:
-        # Load symbol configs to know which epics have trail_pct > 0
         symbols = await self._store.list_symbol_configs()
         trail_map: dict[str, tuple[float, str]] = {}  # epic -> (trail_pct, account_id)
         for sym in symbols:
@@ -90,15 +98,12 @@ class PctTrailer:
         if not trail_map:
             return
 
-        # Group epics by account_id
         account_epics: dict[str, list[str]] = {}
         for epic, (_, account_id) in trail_map.items():
             account_epics.setdefault(account_id, []).append(epic)
 
-        # Collect all live deal_ids across all accounts for cleanup
         all_live_deal_ids: set[str] = set()
 
-        # For each account, fetch positions and process
         for account_id, epics in account_epics.items():
             client = self._clients.get(account_id)
             if client is None:
@@ -131,11 +136,13 @@ class PctTrailer:
 
         # Initialize trail state if new position
         if deal_id not in self._trail:
-            # Calculate current SL as dollar distance from entry
-            # For BUY: sl_dollars = (stop_level - entry) * size (negative if below entry)
-            # We track SL in dollar P&L terms for simplicity
             initial_sl = self._calc_sl_dollars(pos)
-            self._trail[deal_id] = TrailState(peak_upl=0.0, current_sl=initial_sl)
+            self._trail[deal_id] = TrailState(
+                peak_upl=0.0,
+                trail_level=initial_sl,  # starts at original SL level
+                initial_sl=initial_sl,
+                activated=False,
+            )
             logger.info(
                 f"PctTrailer: tracking {pos.epic} deal={deal_id} "
                 f"initial_sl=${initial_sl:.2f} trail_pct={trail_pct}%"
@@ -143,41 +150,20 @@ class PctTrailer:
 
         state = self._trail[deal_id]
 
-        # Only act when UPL sets a new high
-        if upl <= state.peak_upl:
-            return
-
-        # New peak! Calculate delta and move SL
-        delta = upl - state.peak_upl
-        sl_bump = delta * (trail_pct / 100.0)
-        new_sl_dollars = state.current_sl + sl_bump
-
-        # Calculate the new stop_level price from the dollar SL
-        new_stop_price = self._dollars_to_stop_price(pos, new_sl_dollars)
-
-        # Only move SL up (higher price for BUY, lower price for SELL)
-        current_stop = pos.stop_level
-        if current_stop is not None:
-            if pos.direction == "BUY" and new_stop_price <= current_stop:
-                # Update peak but don't move SL down
-                state.peak_upl = upl
-                return
-            if pos.direction == "SELL" and new_stop_price >= current_stop:
-                state.peak_upl = upl
-                return
-
-        # Fire-and-forget SL update
-        try:
-            actual_sl = await client.update_position_fast(deal_id, new_stop_price)
-            old_sl = state.current_sl
-            state.current_sl = new_sl_dollars
+        # New peak → raise trail level
+        if upl > state.peak_upl:
+            delta = upl - state.peak_upl
+            sl_bump = delta * (trail_pct / 100.0)
+            old_trail = state.trail_level
+            state.trail_level += sl_bump
             state.peak_upl = upl
+
+            if not state.activated and upl > 0:
+                state.activated = True
 
             logger.info(
                 f"PctTrailer: {pos.epic} deal={deal_id} "
-                f"peak=${upl:.2f} delta=${delta:.2f} "
-                f"SL ${old_sl:.2f} -> ${new_sl_dollars:.2f} "
-                f"(price={actual_sl})"
+                f"new peak=${upl:.2f} trail ${old_trail:.2f} -> ${state.trail_level:.2f}"
             )
 
             await self._store.log_audit(
@@ -186,16 +172,47 @@ class PctTrailer:
                     "deal_id": deal_id,
                     "peak_upl": round(upl, 2),
                     "delta": round(delta, 2),
-                    "sl_old": round(old_sl, 2),
-                    "sl_new": round(new_sl_dollars, 2),
-                    "stop_price": actual_sl,
+                    "trail_old": round(old_trail, 2),
+                    "trail_new": round(state.trail_level, 2),
                     "trail_pct": trail_pct,
                 },
             )
-        except Exception as e:
-            # Still update peak so we don't retry the same delta
-            state.peak_upl = upl
-            logger.error(f"PctTrailer: failed to update SL for {deal_id}: {e}")
+            return
+
+        # Check if trail level is hit — only close if trail has been activated
+        # and trail_level has moved above the initial SL (otherwise let Capital handle it)
+        if (
+            state.activated
+            and state.trail_level > state.initial_sl
+            and upl <= state.trail_level
+        ):
+            logger.info(
+                f"PctTrailer: CLOSING {pos.epic} deal={deal_id} "
+                f"UPL=${upl:.2f} hit trail_level=${state.trail_level:.2f} "
+                f"(peak was ${state.peak_upl:.2f})"
+            )
+
+            try:
+                await client.close_position(deal_id)
+
+                pnl = upl  # UPL at time of close is approximate P&L
+                await self._store.log_audit(
+                    pos.epic, "PCT_TRAIL_EXIT",
+                    {
+                        "deal_id": deal_id,
+                        "upl_at_close": round(upl, 2),
+                        "trail_level": round(state.trail_level, 2),
+                        "peak_upl": round(state.peak_upl, 2),
+                        "trail_pct": trail_pct,
+                    },
+                    pnl=pnl,
+                )
+
+                # Remove from tracking (will also be cleaned up next tick)
+                self._trail.pop(deal_id, None)
+
+            except Exception as e:
+                logger.error(f"PctTrailer: failed to close {deal_id}: {e}")
 
     @staticmethod
     def _calc_sl_dollars(pos) -> float:
@@ -206,13 +223,3 @@ class PctTrailer:
             return (pos.stop_level - pos.open_level) * pos.size
         else:  # SELL
             return (pos.open_level - pos.stop_level) * pos.size
-
-    @staticmethod
-    def _dollars_to_stop_price(pos, sl_dollars: float) -> float:
-        """Convert dollar SL back to a price level."""
-        if pos.size == 0:
-            return pos.open_level
-        if pos.direction == "BUY":
-            return pos.open_level + (sl_dollars / pos.size)
-        else:  # SELL
-            return pos.open_level - (sl_dollars / pos.size)
