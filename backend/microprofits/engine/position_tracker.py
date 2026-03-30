@@ -249,12 +249,13 @@ class PositionTracker:
                                 sl_cfg = symbol_cfg.get("stop_loss") or config.get("stop_loss", 10)
                                 ema_on = config.get("ema_filter_on", False)
                                 ema_period = config.get("ema_period", 5)
+                                vel_threshold = config.get("velocity_threshold", 0.15)
 
                                 signal = scalper.check_entry(
                                     epic=epic, current_candle=current_candle, history=history,
                                     num_contracts=num_contracts, profit_target=pt, stop_loss=sl_cfg,
                                     min_stop_distance=min_stop_distance, ema_filter_on=ema_on,
-                                    ema_period=ema_period,
+                                    ema_period=ema_period, velocity_threshold=vel_threshold,
                                 )
                                 if signal:
                                     await self.open_position(signal)

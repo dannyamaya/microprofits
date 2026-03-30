@@ -239,6 +239,7 @@ class ScalperLoop:
             else:
                 ema_on = config.get("ema_filter_on", False)
                 ema_period = config.get("ema_period", 5)
+                velocity_threshold = config.get("velocity_threshold", 0.15)
                 signal = self.scalper.check_entry(
                     epic=epic,
                     current_candle=current_candle,
@@ -249,6 +250,7 @@ class ScalperLoop:
                     min_stop_distance=min_stop,
                     ema_filter_on=ema_on,
                     ema_period=ema_period,
+                    velocity_threshold=velocity_threshold,
                 )
 
             if signal:

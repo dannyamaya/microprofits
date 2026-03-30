@@ -14,6 +14,7 @@ export default function ConfigPanel({ config, onRefresh }: Props) {
   const [emaOn, setEmaOn] = useState(config.ema_filter_on);
   const [emaPeriod, setEmaPeriod] = useState(config.ema_period);
   const [cooldown, setCooldown] = useState(config.entry_cooldown);
+  const [velocityThreshold, setVelocityThreshold] = useState(config.velocity_threshold);
   const [symbols, setSymbols] = useState<any[]>([]);
 
   useEffect(() => {
@@ -24,6 +25,7 @@ export default function ConfigPanel({ config, onRefresh }: Props) {
     setEmaOn(config.ema_filter_on);
     setEmaPeriod(config.ema_period);
     setCooldown(config.entry_cooldown);
+    setVelocityThreshold(config.velocity_threshold);
   }, [config]);
 
   useEffect(() => {
@@ -39,6 +41,7 @@ export default function ConfigPanel({ config, onRefresh }: Props) {
       ema_filter_on: emaOn,
       ema_period: emaPeriod,
       entry_cooldown: cooldown,
+      velocity_threshold: velocityThreshold,
     });
     onRefresh();
   };
@@ -131,10 +134,21 @@ export default function ConfigPanel({ config, onRefresh }: Props) {
             onChange={(e) => setEmaPeriod(Number(e.target.value))}
           />
         </label>
+        <label>
+          Velocity (pts/s)
+          <input
+            type="number"
+            step="0.05"
+            min="0.01"
+            max="5"
+            value={velocityThreshold}
+            onChange={(e) => setVelocityThreshold(Number(e.target.value))}
+          />
+        </label>
       </div>
 
       <p className="config-hint">
-        Trail mode: SL moves up by Profit Target each time UPL crosses a new increment
+        Entry triggers when price moves faster than Velocity threshold (points/second)
       </p>
 
       <button className="btn btn-primary" onClick={save}>
