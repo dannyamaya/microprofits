@@ -19,8 +19,12 @@ BREAKOUT_START_HOUR = 8
 # Stop looking for breakouts after 12:00 UTC
 BREAKOUT_END_HOUR = 12
 
-# Skip entry if Asian range is wider than this (volatile day)
-MAX_RANGE_POINTS = 25.0
+# Skip entry if Asian range is wider than this (no structure)
+MAX_RANGE_POINTS = 60.0
+
+# Target dollar risk per trade — contracts are sized to fit this budget
+# Overridden by stop_loss from symbol/bot config at runtime
+DEFAULT_RISK_BUDGET = 25.0
 
 
 @dataclass
@@ -93,7 +97,6 @@ class AsianRangeBreakout:
 
         # TP = 1.5x range width, SL = opposite end of range
         direction = None
-        sl_level = None
 
         if price > rng.high:
             direction = "BUY"
@@ -112,10 +115,13 @@ class AsianRangeBreakout:
         if tp_distance < min_stop_distance:
             tp_distance = min_stop_distance
 
-        # Cap risk: if SL distance in dollars exceeds stop_loss config, skip
-        sl_dollars = sl_distance * num_contracts
-        if sl_dollars > stop_loss * 2:
-            logger.debug(f"{epic}: SL ${sl_dollars:.2f} too large — skip")
+        # Dynamic position sizing: scale contracts so dollar risk fits budget
+        risk_budget = stop_loss if stop_loss else DEFAULT_RISK_BUDGET
+        sized_contracts = min(num_contracts, risk_budget / sl_distance)
+        sized_contracts = round(sized_contracts, 2)
+
+        if sized_contracts < 0.01:
+            logger.debug(f"{epic}: sized contracts {sized_contracts} too small — skip")
             return None
 
         if direction == "BUY":
@@ -131,13 +137,14 @@ class AsianRangeBreakout:
         logger.info(
             f"{epic}: ASIAN BREAKOUT {direction} @ {price:.2f} "
             f"range=[{rng.low:.2f}–{rng.high:.2f}] width={rng.width:.1f} "
-            f"SL={sl_level:.2f} TP={tp_level:.2f}"
+            f"SL={sl_level:.2f} TP={tp_level:.2f} "
+            f"contracts={sized_contracts} (risk=${sl_distance * sized_contracts:.2f})"
         )
 
         return EntrySignal(
             epic=epic,
             direction=direction,
-            size=num_contracts,
+            size=sized_contracts,
             stop_level=sl_level,
             profit_level=tp_level,
             entry_price=price,
