@@ -90,6 +90,9 @@ TRAIL_VIEWER_HTML = """
   .event-TRAIL_MOVE { background: #23863633; color: #3fb950; }
   .event-EXIT { background: #f8514933; color: #f85149; }
   .event-TICK { background: #30363d; color: #8b949e; }
+  .event-TP_HIT { background: #23863633; color: #3fb950; }
+  .event-SL_HIT { background: #f8514933; color: #f85149; }
+  .event-SERVER_CLOSE { background: #d2992233; color: #d29922; }
 
   /* Pagination */
   .pagination { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; padding: 8px 0; }
@@ -142,6 +145,9 @@ TRAIL_VIEWER_HTML = """
       <option value="INIT">INIT</option>
       <option value="TRAIL_MOVE">TRAIL_MOVE</option>
       <option value="EXIT">EXIT</option>
+      <option value="TP_HIT">TP_HIT</option>
+      <option value="SL_HIT">SL_HIT</option>
+      <option value="SERVER_CLOSE">SERVER_CLOSE</option>
     </select>
   </div>
   <div class="filter-group">

@@ -97,6 +97,13 @@ class PositionTracker:
                         {"deal_id": deal_id, "pnl": pnl},
                         pnl=pnl,
                     )
+                    await self._store.save_trail_snapshot(
+                        epic=trade["epic"], deal_id=deal_id, upl=pnl,
+                        peak_upl=pnl if pnl > 0 else 0.0,
+                        trail_level=0.0, initial_sl=0.0,
+                        trail_pct=0.0, activated=False,
+                        event="SERVER_CLOSE",
+                    )
                     logger.warning(f"Position {deal_id} closed server-side, pnl={pnl:.2f}")
             except Exception as e:
                 logger.error(f"Error recovering trade {trade.get('deal_id', '?')}: {e}")
@@ -232,6 +239,14 @@ class PositionTracker:
                         )
                         await self._store.log_audit(
                             epic, exit_reason, {"deal_id": deal_id, "pnl": pnl}, pnl=pnl,
+                        )
+                        # Save trail snapshot so the full lifecycle is visible
+                        await self._store.save_trail_snapshot(
+                            epic=epic, deal_id=deal_id, upl=pnl,
+                            peak_upl=pnl if pnl > 0 else 0.0,
+                            trail_level=0.0, initial_sl=0.0,
+                            trail_pct=0.0, activated=False,
+                            event=exit_reason,
                         )
                     except Exception as e:
                         logger.error(f"Failed to log trade close: {e}")
