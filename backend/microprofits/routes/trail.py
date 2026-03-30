@@ -130,8 +130,10 @@ TRAIL_VIEWER_HTML = """
     </select>
   </div>
   <div class="filter-group">
-    <label>Deal ID</label>
-    <input type="text" id="fDealId" placeholder="e.g. DIAAAAE..." style="width:180px;">
+    <label>Trade</label>
+    <select id="fDealId" style="min-width:180px;">
+      <option value="">All trades</option>
+    </select>
   </div>
   <div class="filter-group">
     <label>Event</label>
@@ -193,6 +195,65 @@ let currentPage = 1;
 let autoRefresh = true;
 let refreshTimer = null;
 
+// Friendly name map: deal_id -> "US100-01", "GOLD-03", etc.
+let dealNames = {};    // deal_id -> friendly name
+let dealIdLookup = {}; // friendly name -> deal_id
+
+function buildDealNames(data) {
+  // Find INIT events sorted by time (oldest first) to assign sequential numbers
+  const inits = data.filter(r => r.event === 'INIT').reverse();
+  const counters = {};  // epic -> count
+
+  // First pass: assign names from INIT events
+  for (const r of inits) {
+    if (dealNames[r.deal_id]) continue;
+    counters[r.epic] = (counters[r.epic] || 0) + 1;
+    const name = `${r.epic}-${String(counters[r.epic]).padStart(2, '0')}`;
+    dealNames[r.deal_id] = name;
+    dealIdLookup[name] = r.deal_id;
+  }
+
+  // Second pass: catch any deal_ids without INIT (e.g., if data is partial)
+  for (const r of data) {
+    if (dealNames[r.deal_id]) continue;
+    counters[r.epic] = (counters[r.epic] || 0) + 1;
+    const name = `${r.epic}-${String(counters[r.epic]).padStart(2, '0')}`;
+    dealNames[r.deal_id] = name;
+    dealIdLookup[name] = r.deal_id;
+  }
+}
+
+function friendlyName(dealId) {
+  return dealNames[dealId] || dealId.slice(0, 8);
+}
+
+function populateDealPicker(data) {
+  const select = document.getElementById('fDealId');
+  const current = select.value;
+  const seen = new Set();
+  const options = [];
+
+  // Collect unique deals, oldest INIT first
+  const sorted = [...data].reverse();
+  for (const r of sorted) {
+    if (seen.has(r.deal_id)) continue;
+    seen.add(r.deal_id);
+    const name = friendlyName(r.deal_id);
+    const initRow = sorted.find(x => x.deal_id === r.deal_id && x.event === 'INIT');
+    const date = initRow ? initRow.ts.slice(0, 10) : r.ts.slice(0, 10);
+    options.push({ deal_id: r.deal_id, name, date });
+  }
+
+  select.innerHTML = '<option value="">All trades</option>';
+  for (const o of options) {
+    const opt = document.createElement('option');
+    opt.value = o.deal_id;
+    opt.textContent = `${o.name}  (${o.date})`;
+    select.appendChild(opt);
+  }
+  select.value = current;
+}
+
 // -- Live states --
 async function loadLiveStates() {
   try {
@@ -207,7 +268,7 @@ async function loadLiveStates() {
 
     el.innerHTML = data.map(s => `
       <div class="live-card">
-        <div class="deal">${s.deal_id}</div>
+        <div class="deal"><strong>${friendlyName(s.deal_id)}</strong> <span style="color:#484f58;font-size:0.65rem;">${s.deal_id}</span></div>
         <div class="metrics">
           <div class="metric">
             <span class="label">Peak UPL</span>
@@ -234,67 +295,74 @@ async function loadLiveStates() {
 }
 
 // -- History --
+let allData = [];  // cached for filtering
+
+async function fetchAllData() {
+  const res = await fetch(`${API}/api/trail/history?limit=5000`);
+  allData = await res.json();
+  buildDealNames(allData);
+  populateDealPicker(allData);
+}
+
 async function loadHistory(page) {
   if (page < 1) return;
   currentPage = page;
 
+  if (!allData.length) await fetchAllData();
+
   const epic = document.getElementById('fEpic').value;
-  const dealId = document.getElementById('fDealId').value.trim();
+  const dealId = document.getElementById('fDealId').value;
   const eventFilter = document.getElementById('fEvent').value;
   const from = document.getElementById('fFrom').value;
   const to = document.getElementById('fTo').value;
 
-  const params = new URLSearchParams();
-  if (epic) params.set('epic', epic);
-  if (dealId) params.set('deal_id', dealId);
-  params.set('limit', '5000');
+  let data = allData;
+  if (epic) data = data.filter(r => r.epic === epic);
+  if (dealId) data = data.filter(r => r.deal_id === dealId);
+  if (eventFilter) data = data.filter(r => r.event === eventFilter);
+  if (from) data = data.filter(r => r.ts && r.ts.slice(0, 10) >= from);
+  if (to) data = data.filter(r => r.ts && r.ts.slice(0, 10) <= to);
 
-  try {
-    const res = await fetch(`${API}/api/trail/history?${params}`);
-    let data = await res.json();
+  const total = data.length;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  if (currentPage > totalPages) currentPage = totalPages;
 
-    // Client-side filters
-    if (eventFilter) data = data.filter(r => r.event === eventFilter);
-    if (from) data = data.filter(r => r.ts && r.ts.slice(0, 10) >= from);
-    if (to) data = data.filter(r => r.ts && r.ts.slice(0, 10) <= to);
+  const start = (currentPage - 1) * PAGE_SIZE;
+  const pageData = data.slice(start, start + PAGE_SIZE);
 
-    const total = data.length;
-    const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-    if (currentPage > totalPages) currentPage = totalPages;
-
-    const start = (currentPage - 1) * PAGE_SIZE;
-    const pageData = data.slice(start, start + PAGE_SIZE);
-
-    const tbody = document.getElementById('historyBody');
-    if (!pageData.length) {
-      tbody.innerHTML = '<tr><td colspan="10" class="no-data">No trail snapshots found</td></tr>';
-    } else {
-      tbody.innerHTML = pageData.map(r => {
-        const ts = r.ts ? formatTs(r.ts) : '-';
-        const uplClass = r.upl > 0 ? 'positive' : r.upl < 0 ? 'negative' : '';
-        const peakClass = r.peak_upl > 0 ? 'positive' : '';
-        return `<tr>
-          <td>${ts}</td>
-          <td>${r.epic}</td>
-          <td title="${r.deal_id}">${r.deal_id.slice(0, 12)}...</td>
-          <td><span class="event-badge event-${r.event}">${r.event}</span></td>
-          <td class="${uplClass}">\$${r.upl.toFixed(2)}</td>
-          <td class="${peakClass}">\$${r.peak_upl.toFixed(2)}</td>
-          <td>\$${r.trail_level.toFixed(2)}</td>
-          <td>\$${r.initial_sl.toFixed(2)}</td>
-          <td>${r.trail_pct}%</td>
-          <td>${r.activated ? 'Yes' : 'No'}</td>
-        </tr>`;
-      }).join('');
-    }
-
-    document.getElementById('pageInfo').textContent =
-      `Showing ${start + 1}-${Math.min(start + PAGE_SIZE, total)} of ${total} snapshots (page ${currentPage}/${totalPages})`;
-    document.getElementById('prevBtn').disabled = currentPage <= 1;
-    document.getElementById('nextBtn').disabled = currentPage >= totalPages;
-  } catch (e) {
-    console.error('Failed to load history:', e);
+  const tbody = document.getElementById('historyBody');
+  if (!pageData.length) {
+    tbody.innerHTML = '<tr><td colspan="10" class="no-data">No trail snapshots found</td></tr>';
+  } else {
+    tbody.innerHTML = pageData.map(r => {
+      const ts = r.ts ? formatTs(r.ts) : '-';
+      const uplClass = r.upl > 0 ? 'positive' : r.upl < 0 ? 'negative' : '';
+      const peakClass = r.peak_upl > 0 ? 'positive' : '';
+      const name = friendlyName(r.deal_id);
+      return `<tr>
+        <td>${ts}</td>
+        <td>${r.epic}</td>
+        <td title="${r.deal_id}" style="cursor:pointer;" onclick="filterByDeal('${r.deal_id}')">${name}</td>
+        <td><span class="event-badge event-${r.event}">${r.event}</span></td>
+        <td class="${uplClass}">\$${r.upl.toFixed(2)}</td>
+        <td class="${peakClass}">\$${r.peak_upl.toFixed(2)}</td>
+        <td>\$${r.trail_level.toFixed(2)}</td>
+        <td>\$${r.initial_sl.toFixed(2)}</td>
+        <td>${r.trail_pct}%</td>
+        <td>${r.activated ? 'Yes' : 'No'}</td>
+      </tr>`;
+    }).join('');
   }
+
+  document.getElementById('pageInfo').textContent =
+    `Showing ${start + 1}-${Math.min(start + PAGE_SIZE, total)} of ${total} snapshots (page ${currentPage}/${totalPages})`;
+  document.getElementById('prevBtn').disabled = currentPage <= 1;
+  document.getElementById('nextBtn').disabled = currentPage >= totalPages;
+}
+
+function filterByDeal(dealId) {
+  document.getElementById('fDealId').value = dealId;
+  loadHistory(1);
 }
 
 function formatTs(iso) {
@@ -328,10 +396,19 @@ function startAutoRefresh() {
   }, 3000);
 }
 
+// Refresh data cache periodically
+async function refreshData() {
+  await fetchAllData();
+  loadHistory(currentPage);
+}
+
 // Init
-loadLiveStates();
-loadHistory(1);
+fetchAllData().then(() => {
+  loadLiveStates();
+  loadHistory(1);
+});
 startAutoRefresh();
+setInterval(refreshData, 30000); // refresh history data every 30s
 </script>
 </body>
 </html>
