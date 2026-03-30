@@ -93,6 +93,7 @@ TRAIL_VIEWER_HTML = """
   .event-TP_HIT { background: #23863633; color: #3fb950; }
   .event-SL_HIT { background: #f8514933; color: #f85149; }
   .event-SERVER_CLOSE { background: #d2992233; color: #d29922; }
+  .event-TRAIL_CLOSE { background: #23863633; color: #3fb950; }
 
   /* Pagination */
   .pagination { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; padding: 8px 0; }
@@ -147,6 +148,7 @@ TRAIL_VIEWER_HTML = """
       <option value="EXIT">EXIT</option>
       <option value="TP_HIT">TP_HIT</option>
       <option value="SL_HIT">SL_HIT</option>
+      <option value="TRAIL_CLOSE">TRAIL_CLOSE</option>
       <option value="SERVER_CLOSE">SERVER_CLOSE</option>
     </select>
   </div>

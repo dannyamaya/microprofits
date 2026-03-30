@@ -227,9 +227,15 @@ class PositionTracker:
                     if pnl == 0:
                         pnl = self._estimate_pnl_tracked(tracked)
 
-                    exit_reason = "TP_HIT" if pnl >= 0 else "SL_HIT"
+                    if pnl < 0:
+                        exit_reason = "SL_HIT"
+                    elif tracked.profit_level is not None:
+                        exit_reason = "TP_HIT"
+                    else:
+                        # No TP was set — trail or manual close
+                        exit_reason = "TRAIL_CLOSE"
                     exit_price = (
-                        tracked.profit_level if pnl >= 0 else tracked.stop_level
+                        tracked.profit_level if exit_reason == "TP_HIT" else tracked.stop_level
                     ) or tracked.entry_price
                     seconds_held = time.time() - tracked.opened_ts
 

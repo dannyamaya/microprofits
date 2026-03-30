@@ -103,7 +103,8 @@ class MomentumScalper:
             tp_distance = min_stop_distance
 
         stop_level = round(current_price - sl_distance, 2)
-        profit_level = None if manual_mode else round(current_price + tp_distance, 2)
+        # No TP on scalper — PctTrailer manages the exit via trailing stop
+        profit_level = None
 
         return EntrySignal(
             epic=epic,
