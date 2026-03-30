@@ -97,6 +97,23 @@ class Store:
 
                 CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts DESC);
                 CREATE INDEX IF NOT EXISTS idx_audit_epic ON audit_log(epic, ts DESC);
+
+                CREATE TABLE IF NOT EXISTS trail_snapshots (
+                    id              BIGSERIAL PRIMARY KEY,
+                    ts              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    epic            TEXT NOT NULL,
+                    deal_id         TEXT NOT NULL,
+                    upl             DOUBLE PRECISION NOT NULL,
+                    peak_upl        DOUBLE PRECISION NOT NULL,
+                    trail_level     DOUBLE PRECISION NOT NULL,
+                    initial_sl      DOUBLE PRECISION NOT NULL,
+                    trail_pct       DOUBLE PRECISION NOT NULL,
+                    activated       BOOLEAN NOT NULL DEFAULT FALSE,
+                    event           TEXT NOT NULL DEFAULT 'TICK'
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_trail_snap_deal ON trail_snapshots(deal_id, ts DESC);
+                CREATE INDEX IF NOT EXISTS idx_trail_snap_epic ON trail_snapshots(epic, ts DESC);
             """)
 
     async def _migrate(self) -> None:
@@ -371,6 +388,50 @@ class Store:
                 json.dumps(detail or {}),
                 pnl,
             )
+
+    # -- trail snapshots -----------------------------------------------------
+
+    async def save_trail_snapshot(
+        self,
+        epic: str,
+        deal_id: str,
+        upl: float,
+        peak_upl: float,
+        trail_level: float,
+        initial_sl: float,
+        trail_pct: float,
+        activated: bool,
+        event: str = "TICK",
+    ) -> None:
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO trail_snapshots
+                   (epic, deal_id, upl, peak_upl, trail_level, initial_sl, trail_pct, activated, event)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)""",
+                epic, deal_id,
+                round(upl, 2), round(peak_upl, 2), round(trail_level, 2),
+                round(initial_sl, 2), trail_pct, activated, event,
+            )
+
+    async def get_trail_history(
+        self, deal_id: str | None = None, epic: str | None = None, limit: int = 500
+    ) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            if deal_id:
+                rows = await conn.fetch(
+                    "SELECT * FROM trail_snapshots WHERE deal_id = $1 ORDER BY ts DESC LIMIT $2",
+                    deal_id, limit,
+                )
+            elif epic:
+                rows = await conn.fetch(
+                    "SELECT * FROM trail_snapshots WHERE epic = $1 ORDER BY ts DESC LIMIT $2",
+                    epic, limit,
+                )
+            else:
+                rows = await conn.fetch(
+                    "SELECT * FROM trail_snapshots ORDER BY ts DESC LIMIT $1", limit,
+                )
+            return [dict(r) for r in rows]
 
     async def get_audit_log(self, limit: int = 100, epic: str | None = None) -> list[dict]:
         async with self.pool.acquire() as conn:

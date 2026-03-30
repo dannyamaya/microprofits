@@ -152,6 +152,10 @@ class PctTrailer:
                 f"PctTrailer: tracking {pos.epic} deal={deal_id} "
                 f"initial_sl=${initial_sl:.2f} trail_pct={trail_pct}%"
             )
+            await self._store.save_trail_snapshot(
+                pos.epic, deal_id, upl, 0.0, initial_sl, initial_sl,
+                trail_pct, False, "INIT",
+            )
 
         state = self._trail[deal_id]
 
@@ -182,6 +186,10 @@ class PctTrailer:
                     "trail_pct": trail_pct,
                 },
             )
+            await self._store.save_trail_snapshot(
+                pos.epic, deal_id, upl, state.peak_upl, state.trail_level,
+                state.initial_sl, trail_pct, state.activated, "TRAIL_MOVE",
+            )
             return
 
         # Check if trail level is hit — only close if trail has been activated
@@ -211,6 +219,10 @@ class PctTrailer:
                         "trail_pct": trail_pct,
                     },
                     pnl=pnl,
+                )
+                await self._store.save_trail_snapshot(
+                    pos.epic, deal_id, upl, state.peak_upl, state.trail_level,
+                    state.initial_sl, trail_pct, state.activated, "EXIT",
                 )
 
                 # Remove from tracking (will also be cleaned up next tick)
