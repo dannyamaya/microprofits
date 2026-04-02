@@ -6,7 +6,7 @@ Multi-strategy trading bot integrated with Capital.com REST API. Supports per-sy
 
 ### 1. Momentum Scalper (US100)
 
-Detects upward momentum on 1-minute candles, opens BUY positions with SL only (no TP), then trails the SL up in profit_target increments as price runs. Breakeven protection kicks in at half the profit target.
+Detects upward momentum on 1-minute candles, opens BUY positions with SL only (no TP), then trails via PctTrailer (85% of peak UPL). No breakeven snap — the pct trail gives trades room to breathe through pullbacks.
 
 #### Trail Sequence (profit_target = $5)
 
@@ -176,7 +176,7 @@ The schedule filter does NOT affect position monitoring — SL/TP hits are still
 - **60s backoff on order rejection** — prevents spam when margin is insufficient.
 - **Post-loss cooldown (60s)** — after a losing trade (SL_HIT), the bot pauses 60s before new entries for that epic. Analysis showed WR drops from 60% to 33% after a loss (false momentum persists), so this filters out noise re-entries. Replaces old fixed `entry_cooldown`.
 - **Scalper schedule filter** — restricts entries to 8 safe UTC hours (0,1,6,13,14,15,16,19). The other 16 hours had negative expectancy totaling -$2,554. Does not affect position monitoring or Asian Range.
-- **Breakeven at half target** — eliminates full SL risk early. After breakeven, worst case is $0 not -$10.
+- **No breakeven snap** — removed because it was causing 2-second churn (open → BE snap to $0 → tiny pullback → close at $0 → repeat). The 85% pct trail gives trades room to breathe: at $5 UPL the trail is at -$2.55, at $10 UPL it's at +$1.70. Trades survive normal pullbacks and can develop into bigger winners.
 - **Independent position tracking** — each position has its own `trail_locks` counter, entry price, and SL level.
 - **Crash recovery** — on restart, reconciles DB trades vs live Capital.com positions. SL is server-side so positions are protected even if bot is down.
 - **Rate limit safe** — each symbol fetches only 3 candles per poll (full history only on startup). With 2 symbols at 3s poll: ~4 requests/3s = ~1.3 req/s, well within Capital.com's ~10 req/s safe limit. Each account has its own API session so rate limits are independent.

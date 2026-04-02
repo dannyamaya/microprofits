@@ -38,7 +38,6 @@ class TrailState:
     trail_level: float = 0.0    # internal SL in dollar P&L terms
     initial_sl: float = 0.0     # original SL from Capital (safety net)
     activated: bool = False      # trail only activates once UPL > 0
-    breakeven_hit: bool = False  # True once trail snaps to $0
 
 
 class PctTrailer:
@@ -141,7 +140,6 @@ class PctTrailer:
     ) -> None:
         deal_id = pos.deal_id
         upl = pos.upl
-        be_threshold = profit_target / 2.0  # breakeven at half profit_target
 
         # Initialize trail state if new position
         if deal_id not in self._trail:
@@ -154,8 +152,7 @@ class PctTrailer:
             )
             logger.info(
                 f"PctTrailer: tracking {pos.epic} deal={deal_id} "
-                f"initial_sl=${initial_sl:.2f} trail_pct={trail_pct}% "
-                f"BE@${be_threshold:.2f}"
+                f"initial_sl=${initial_sl:.2f} trail_pct={trail_pct}%"
             )
             await self._store.save_trail_snapshot(
                 pos.epic, deal_id, upl, 0.0, initial_sl, initial_sl,
@@ -164,35 +161,7 @@ class PctTrailer:
 
         state = self._trail[deal_id]
 
-        # Stage 1: Breakeven snap — when UPL first reaches threshold, jump trail to $0
-        if not state.breakeven_hit and upl >= be_threshold:
-            old_trail = state.trail_level
-            state.trail_level = 0.0
-            state.breakeven_hit = True
-            state.activated = True
-            state.peak_upl = upl
-
-            logger.info(
-                f"PctTrailer: BREAKEVEN {pos.epic} deal={deal_id} "
-                f"UPL=${upl:.2f} >= ${be_threshold:.2f} — trail snapped to $0"
-            )
-            await self._store.log_audit(
-                pos.epic, "PCT_BREAKEVEN",
-                {
-                    "deal_id": deal_id,
-                    "upl": round(upl, 2),
-                    "threshold": round(be_threshold, 2),
-                    "trail_old": round(old_trail, 2),
-                    "trail_new": 0.0,
-                },
-            )
-            await self._store.save_trail_snapshot(
-                pos.epic, deal_id, upl, state.peak_upl, 0.0,
-                state.initial_sl, trail_pct, True, "BREAKEVEN",
-            )
-            return
-
-        # Stage 2: New peak → raise trail level (pct trail, only after breakeven)
+        # New peak → raise trail level (pct trail)
         if upl > state.peak_upl:
             delta = upl - state.peak_upl
             sl_bump = delta * (trail_pct / 100.0)
