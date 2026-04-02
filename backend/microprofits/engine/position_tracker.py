@@ -13,6 +13,7 @@ from microprofits.data.store import Store
 from microprofits.strategy.scalper import EntrySignal
 
 FAST_TP_THRESHOLD = 15.0
+POST_LOSS_COOLDOWN = 60.0  # seconds to wait after a loss before re-entering
 
 
 @dataclass
@@ -35,7 +36,7 @@ class PositionTracker:
         self._client = client
         self._store = store
         self._positions: dict[str, TrackedPosition] = {}
-        self._last_entry_time: dict[str, float] = {}
+        self._last_loss_time: dict[str, float] = {}
 
     @property
     def open_positions(self) -> list[TrackedPosition]:
@@ -44,10 +45,11 @@ class PositionTracker:
     def count_for_epic(self, epic: str) -> int:
         return sum(1 for p in self._positions.values() if p.epic == epic)
 
-    def can_open(self, epic: str, max_positions: int, cooldown: float = 30.0) -> bool:
+    def can_open(self, epic: str, max_positions: int) -> bool:
         if self.count_for_epic(epic) >= max_positions:
             return False
-        if (time.time() - self._last_entry_time.get(epic, 0)) < cooldown:
+        elapsed = time.time() - self._last_loss_time.get(epic, 0)
+        if elapsed < POST_LOSS_COOLDOWN:
             return False
         return True
 
@@ -132,8 +134,6 @@ class PositionTracker:
         except Exception as e:
             logger.error(f"Unexpected error opening position: {e}")
             return None
-
-        self._last_entry_time[signal.epic] = time.time()
 
         # Reconcile deal_id
         actual_deal_id = confirm.deal_id
@@ -258,6 +258,8 @@ class PositionTracker:
                         logger.error(f"Failed to log trade close: {e}")
 
                     to_remove.append(deal_id)
+                    if pnl < 0:
+                        self._last_loss_time[epic] = time.time()
                     logger.info(f"{exit_reason} {epic} deal={deal_id} pnl={pnl:.2f} held {seconds_held:.0f}s")
 
                     # Fast TP reopen

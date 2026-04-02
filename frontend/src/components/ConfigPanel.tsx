@@ -13,7 +13,6 @@ export default function ConfigPanel({ config, onRefresh }: Props) {
   const [numContracts, setNumContracts] = useState(config.num_contracts);
   const [emaOn, setEmaOn] = useState(config.ema_filter_on);
   const [emaPeriod, setEmaPeriod] = useState(config.ema_period);
-  const [cooldown, setCooldown] = useState(config.entry_cooldown);
   const [velocityThreshold, setVelocityThreshold] = useState(config.velocity_threshold);
   const [manualMode, setManualMode] = useState(config.manual_mode);
   const [symbols, setSymbols] = useState<any[]>([]);
@@ -25,7 +24,6 @@ export default function ConfigPanel({ config, onRefresh }: Props) {
     setNumContracts(config.num_contracts);
     setEmaOn(config.ema_filter_on);
     setEmaPeriod(config.ema_period);
-    setCooldown(config.entry_cooldown);
     setVelocityThreshold(config.velocity_threshold);
     setManualMode(config.manual_mode);
   }, [config]);
@@ -42,7 +40,6 @@ export default function ConfigPanel({ config, onRefresh }: Props) {
       num_contracts: numContracts,
       ema_filter_on: emaOn,
       ema_period: emaPeriod,
-      entry_cooldown: cooldown,
       velocity_threshold: velocityThreshold,
       manual_mode: manualMode,
     });
@@ -107,16 +104,6 @@ export default function ConfigPanel({ config, onRefresh }: Props) {
             min="0.5"
             value={numContracts}
             onChange={(e) => setNumContracts(Number(e.target.value))}
-          />
-        </label>
-        <label>
-          Entry Cooldown (s)
-          <input
-            type="number"
-            min="5"
-            max="300"
-            value={cooldown}
-            onChange={(e) => setCooldown(Number(e.target.value))}
           />
         </label>
         <label className="toggle-row">

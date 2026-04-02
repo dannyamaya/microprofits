@@ -60,7 +60,7 @@ export default function App() {
         <ConfigPanel config={config} onRefresh={refresh} />
         <PnlSummary stats={stats} />
       </div>
-      <SchedulePanel />
+      <SchedulePanel status={status} />
       <PositionTable positions={positions} />
       <Heatmap data={heatmap} />
       <TradeHistory trades={trades} />

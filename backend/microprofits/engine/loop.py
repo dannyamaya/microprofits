@@ -5,6 +5,11 @@ from datetime import datetime, timezone
 
 from loguru import logger
 
+# Scalper only trades in hours with proven positive expectancy (UTC).
+# Based on historical analysis of ~3000 trades (Mar-Apr 2026).
+# Asian Range has its own schedule and is NOT affected by this.
+SCALPER_SAFE_HOURS: frozenset[int] = frozenset({0, 1, 6, 13, 14, 15, 16, 19})
+
 from microprofits.api.rest_client import RestClient
 from microprofits.api.exceptions import RateLimitError, CapitalAPIError
 from microprofits.data.store import Store
@@ -220,7 +225,6 @@ class ScalperLoop:
         profit_target = symbol_cfg.get("profit_target") or config.get("profit_target", 5)
         stop_loss = symbol_cfg.get("stop_loss") or config.get("stop_loss", 10)
         max_positions = symbol_cfg.get("max_positions") or config.get("max_positions", 3)
-        cooldown = config.get("entry_cooldown", 30.0)
 
         # 1. Detect server-side closes (TP/SL hit) + fast reopen
         active_scalper = self.scalper if strategy == "scalper" else None
@@ -236,8 +240,14 @@ class ScalperLoop:
             min_stop_distance=min_stop,
         )
 
-        # 2. Check for new entry (with cooldown)
-        if tracker.can_open(epic, max_positions, cooldown):
+        # 2. Schedule gate: scalper only trades in safe hours
+        if strategy == "scalper":
+            utc_hour = datetime.now(timezone.utc).hour
+            if utc_hour not in SCALPER_SAFE_HOURS:
+                return  # outside trading window, skip entry check
+
+        # 3. Check for new entry (post-loss cooldown + max positions)
+        if tracker.can_open(epic, max_positions):
             signal = None
 
             if strategy == "asian_range":

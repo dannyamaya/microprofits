@@ -655,3 +655,29 @@ tbody tr:hover {
   font-style: italic;
   margin: 0;
 }
+
+.schedule-status-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.badge-active {
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--green);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.badge-inactive {
+  background: rgba(113, 113, 122, 0.1);
+  color: var(--text-muted);
+  border: 1px solid rgba(113, 113, 122, 0.2);
+}
+
+.time-row-active {
+  color: var(--green);
+  font-weight: 600;
+}

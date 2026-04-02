@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
 
+from microprofits.engine.loop import SCALPER_SAFE_HOURS
+
 router = APIRouter(prefix="/api", tags=["status"])
 
-_start_time: datetime = datetime.utcnow()
+_start_time: datetime = datetime.now(timezone.utc)
 
 
 @router.get("/status")
@@ -34,14 +36,19 @@ async def get_status(request: Request):
     except Exception:
         pass
 
+    utc_hour = datetime.now(timezone.utc).hour
+
     return {
         "bot_enabled": config.get("enabled", False),
         "loop_running": loop.is_running,
-        "uptime_seconds": (datetime.utcnow() - _start_time).total_seconds(),
+        "uptime_seconds": (datetime.now(timezone.utc) - _start_time).total_seconds(),
         "open_positions": len(loop.tracker.open_positions) + sum(
             len(t.open_positions) for t in loop._trackers.values()
         ),
         "account": balance_info,
+        "utc_hour": utc_hour,
+        "scalper_active": utc_hour in SCALPER_SAFE_HOURS,
+        "scalper_safe_hours": sorted(SCALPER_SAFE_HOURS),
     }
 
 

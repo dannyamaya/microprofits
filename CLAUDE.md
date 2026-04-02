@@ -21,9 +21,10 @@ Price reverses  →    SL hit at last lock level
 
 #### Entry Logic
 
-1. Current candle price > previous closed candle close
+1. Velocity-based: price must be rising >= `velocity_threshold` pts/sec over `velocity_window` ticks
 2. Optional EMA slope filter (switchable from dashboard)
-3. Entry cooldown between positions (configurable, default 30s)
+3. **Post-loss cooldown (60s)**: after any SL_HIT, no new entries for 60 seconds. Replaces the old fixed entry_cooldown. Based on analysis showing WR drops from 60% to 33% after a loss.
+4. **Schedule filter**: only trades in safe hours (see Operating Schedule)
 
 ### 2. Asian Range Breakout (GOLD / XAUUSD)
 
@@ -121,16 +122,29 @@ Default account (from `.env` `CAPITAL_ACCOUNT_ID`) is `microprofits`. Symbols wi
 
 ## Operating Schedule
 
-The bot needs to be running at different hours depending on the strategy:
+### Scalper (US100) — Safe Hours Only
 
-| Strategy | UTC Window | Colombia (UTC-5) | Notes |
-|----------|-----------|-------------------|-------|
-| **Scalper (US100)** | 14:30–21:00 | **9:30 AM – 4:00 PM** | US market hours |
-| **Asian Range (GOLD)** | 00:00–12:00 | **7:00 PM – 7:00 AM** | Asian session + London open |
+The scalper restricts entries to hours with historically positive expectancy. Defined in `SCALPER_SAFE_HOURS` in `engine/loop.py`. Based on analysis of ~3,000 trades (Mar-Apr 2026).
 
-**For running locally:** if you only run Asian Range (GOLD), turn on the PC by **6:30 PM Colombia time** and leave it running until **7:00 AM**. The bot builds the Asian range (7 PM – 2 AM Colombia) and watches for breakouts at London open (3 AM – 7 AM Colombia).
+| Window | UTC Hours | Colombia (UTC-5) | Why |
+|--------|-----------|-------------------|-----|
+| **Evening momentum** | 00:00–02:00 | 7:00 PM – 9:00 PM | Session open momentum, +$549 |
+| **Late night** | 06:00–07:00 | 1:00 AM – 2:00 AM | Low spread + trend continuation, +$231 |
+| **US pre-market + open** | 13:00–17:00 | 8:00 AM – 12:00 PM | Highest volume window, +$185 |
+| **US afternoon** | 19:00–20:00 | 2:00 PM – 3:00 PM | Afternoon momentum, +$70 |
 
-**Practical recommendation:** since the breakout window is 3:00 AM – 7:00 AM Colombia, you can start the bot before going to sleep and it will trade autonomously overnight. The SL/TP are server-side so even if the PC loses connection after entry, the position is protected.
+**Blocked hours** (negative expectancy): 02-05, 07-12, 17-18, 20-23 UTC. These hours had -$2,554 total loss from choppy price action and wide spreads.
+
+The schedule filter does NOT affect position monitoring — SL/TP hits are still detected 24/7. It only blocks new entries.
+
+### Asian Range (GOLD) — Own Schedule
+
+| Phase | UTC Window | Colombia (UTC-5) | Notes |
+|-------|-----------|-------------------|-------|
+| **Building range** | 00:00–07:00 | 7:00 PM – 2:00 AM | Records high/low |
+| **Breakout window** | 08:00–12:00 | 3:00 AM – 7:00 AM | Entry if breakout |
+
+**For running locally:** start the bot by **6:30 PM Colombia time**. The SL/TP are server-side so even if the PC loses connection after entry, the position is protected.
 
 ## Database Tables
 
@@ -149,7 +163,7 @@ The bot needs to be running at different hours depending on the strategy:
 | `stop_loss` | $5 | Initial SL distance in dollars |
 | `max_positions` | 3 | Max concurrent positions per symbol |
 | `num_contracts` | 1 | Contracts per position |
-| `entry_cooldown` | 30s | Min time between fresh entries |
+| `post_loss_cooldown` | 60s | Wait time after SL_HIT before re-entering (hardcoded constant) |
 | `ema_filter_on` | true | Require EMA slope positive for entry |
 | `ema_period` | 5 | EMA lookback (on 1-minute candles) |
 | `poll_interval` | 3s | Seconds between each poll cycle |
@@ -160,6 +174,8 @@ The bot needs to be running at different hours depending on the strategy:
 - **No profitLevel on scalper orders** — Capital.com would auto-close at TP, defeating the trail. SL only, bot manages exit via trailing. Asian Range uses TP since it's a fixed-target strategy.
 - **Fire-and-forget SL updates** — `PUT /positions/{id}` without confirmation polling. Saves 1-3s per trail move. Status checked via HTTP response code.
 - **60s backoff on order rejection** — prevents spam when margin is insufficient.
+- **Post-loss cooldown (60s)** — after a losing trade (SL_HIT), the bot pauses 60s before new entries for that epic. Analysis showed WR drops from 60% to 33% after a loss (false momentum persists), so this filters out noise re-entries. Replaces old fixed `entry_cooldown`.
+- **Scalper schedule filter** — restricts entries to 8 safe UTC hours (0,1,6,13,14,15,16,19). The other 16 hours had negative expectancy totaling -$2,554. Does not affect position monitoring or Asian Range.
 - **Breakeven at half target** — eliminates full SL risk early. After breakeven, worst case is $0 not -$10.
 - **Independent position tracking** — each position has its own `trail_locks` counter, entry price, and SL level.
 - **Crash recovery** — on restart, reconciles DB trades vs live Capital.com positions. SL is server-side so positions are protected even if bot is down.
