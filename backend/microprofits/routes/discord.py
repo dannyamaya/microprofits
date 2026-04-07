@@ -38,15 +38,18 @@ def _verify_signature(body: bytes, signature: str, timestamp: str) -> bool:
 @router.post("/interactions")
 async def discord_interactions(request: Request):
     """Handle Discord interaction webhooks (slash commands)."""
+    logger.info("Discord interaction received")
     body = await request.body()
     signature = request.headers.get("X-Signature-Ed25519", "")
     timestamp = request.headers.get("X-Signature-Timestamp", "")
 
     if not _verify_signature(body, signature, timestamp):
+        logger.warning("Discord signature verification failed")
         return Response(status_code=401, content="Invalid signature")
 
     data = await request.json()
     interaction_type = data.get("type")
+    logger.info(f"Discord interaction type={interaction_type}")
 
     # Type 1: PING (Discord verification handshake)
     if interaction_type == 1:
@@ -55,8 +58,15 @@ async def discord_interactions(request: Request):
     # Type 2: APPLICATION_COMMAND (slash command)
     if interaction_type == 2:
         command = data.get("data", {}).get("name", "")
+        logger.info(f"Discord command: /{command}")
         if command == "bias":
-            return await _handle_bias_command(request)
+            try:
+                result = await _handle_bias_command(request)
+                logger.info("Discord /bias response sent")
+                return result
+            except Exception as e:
+                logger.error(f"Discord /bias handler error: {e}")
+                return {"type": 4, "data": {"content": f"Error: {e}"}}
 
     return {"type": 1}
 
