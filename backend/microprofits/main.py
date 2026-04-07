@@ -9,7 +9,7 @@ from loguru import logger
 from microprofits.api.rest_client import RestClient
 from microprofits.data.store import Store
 from microprofits.engine.loop import ScalperLoop
-from microprofits.routes import bias, bias_dashboard, config, headlines, heatmap, positions, status, trades, trail
+from microprofits.routes import bias, bias_dashboard, config, discord, headlines, heatmap, positions, status, trades, trail
 
 
 @asynccontextmanager
@@ -60,6 +60,7 @@ app.include_router(heatmap.router)
 app.include_router(trail.router)
 app.include_router(bias.router)
 app.include_router(bias_dashboard.router)
+app.include_router(discord.router)
 app.include_router(headlines.router)
 
 

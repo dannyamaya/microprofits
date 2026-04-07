@@ -39,14 +39,14 @@ export default function BiasPage() {
         getHeadlines(),
       ]);
       setConfig(cfg);
-      setInstruments(inst);
-      setPositions(pos);
-      setTrades(tr);
+      setInstruments(Array.isArray(inst) ? inst : []);
+      setPositions(Array.isArray(pos) ? pos : []);
+      setTrades(Array.isArray(tr) ? tr : []);
       setStats(st);
-      setAudit(aud);
+      setAudit(Array.isArray(aud) ? aud : []);
       setAccount(acc);
-      setSignals(sig);
-      setHeadlines(hl);
+      setSignals(sig || {});
+      setHeadlines(Array.isArray(hl) ? hl : []);
     } catch {
       // retry next poll
     }

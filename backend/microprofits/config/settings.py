@@ -14,6 +14,7 @@ class Settings(BaseSettings):
 
     # Discord
     discord_webhook_url: str = ""
+    discord_bot_token: str = ""
 
     # Database
     database_url: str = "postgresql://microprofits:microprofits_dev@db:5432/microprofits"

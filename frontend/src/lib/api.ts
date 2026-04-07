@@ -69,5 +69,7 @@ export const getBiasAudit = (limit = 100) =>
   request<any[]>(`/api/bias/audit?limit=${limit}`);
 export const getBiasAccount = () => request<any>("/api/bias/account");
 export const getBiasSignals = () => request<any>("/api/bias");
-export const getHeadlines = (limit = 60) =>
-  request<any[]>(`/api/headlines?limit=${limit}`);
+export const getHeadlines = async (limit = 60) => {
+  const res = await request<any>(`/api/headlines?limit=${limit}`);
+  return res?.headlines ?? res ?? [];
+};
