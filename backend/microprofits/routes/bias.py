@@ -39,6 +39,8 @@ async def push_bias(request: Request, body: BiasReportInput):
     """Receive bias signals from BillionBot analysis pipeline."""
     store = request.app.state.store
     saved = []
+    discord_signals: list[dict] = []
+    discord_trades: list[dict | None] = []
 
     for sig in body.signals:
         epic = INSTRUMENT_TO_EPIC.get(sig.instrument.upper(), "")
@@ -75,14 +77,29 @@ async def push_bias(request: Request, body: BiasReportInput):
             },
         )
 
-        # Discord notification for signal
-        await _notify_discord_signal(request, sig)
-
         # Trigger bias strategy trade if enabled
         trade_result = await _try_bias_trade(request, sig, epic, signal_id)
         if trade_result:
             saved[-1]["trade"] = trade_result
-            await _notify_discord_trade(request, trade_result)
+
+        # Collect for unified Discord message
+        discord_signals.append({
+            "instrument": sig.instrument,
+            "bias": sig.bias,
+            "confidence": sig.confidence,
+            "current_price": sig.current_price,
+            "price_target": sig.price_target,
+            "stop_loss_price": sig.stop_loss_price,
+            "key_support": sig.key_support,
+            "key_resistance": sig.key_resistance,
+            "catalyst": sig.catalyst,
+            "risk": sig.risk,
+            "trade_idea": sig.trade_idea,
+        })
+        discord_trades.append(trade_result)
+
+    # Send one unified Discord message with all signals + trade actions
+    await _notify_discord_report(request, discord_signals, discord_trades, body.market_context)
 
     return {"saved": saved, "count": len(saved)}
 
@@ -126,38 +143,21 @@ async def _try_bias_trade(
         return None
 
 
-async def _notify_discord_signal(request: Request, sig: BiasSignalInput) -> None:
-    """Send bias signal to Discord."""
+async def _notify_discord_report(
+    request: Request,
+    signals: list[dict],
+    trades: list[dict | None],
+    market_context: str = "",
+) -> None:
+    """Send unified Discord message with all signals + trade actions."""
     loop = getattr(request.app.state, "loop", None)
     discord = getattr(loop, "discord", None) if loop else None
     if not discord or not discord.enabled:
         return
     try:
-        await discord.notify_bias_signal({
-            "instrument": sig.instrument,
-            "bias": sig.bias,
-            "confidence": sig.confidence,
-            "current_price": sig.current_price,
-            "price_target": sig.price_target,
-            "stop_loss_price": sig.stop_loss_price,
-            "catalyst": sig.catalyst,
-            "risk": sig.risk,
-            "trade_idea": sig.trade_idea,
-        })
+        await discord.notify_bias_report(signals, trades, market_context)
     except Exception as e:
-        logger.warning(f"Discord signal notification failed: {e}")
-
-
-async def _notify_discord_trade(request: Request, trade: dict) -> None:
-    """Send trade execution to Discord."""
-    loop = getattr(request.app.state, "loop", None)
-    discord = getattr(loop, "discord", None) if loop else None
-    if not discord or not discord.enabled:
-        return
-    try:
-        await discord.notify_bias_trade(trade)
-    except Exception as e:
-        logger.warning(f"Discord trade notification failed: {e}")
+        logger.error(f"Discord report notification failed: {e}")
 
 
 @router.post("/bias/signal")
