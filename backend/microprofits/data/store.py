@@ -50,6 +50,10 @@ class Store:
                     safety_loss_threshold DOUBLE PRECISION DEFAULT 1.0,
                     safety_cooldown DOUBLE PRECISION DEFAULT 3600.0,
                     manual_mode     BOOLEAN DEFAULT FALSE,
+                    bias_filter_on  BOOLEAN DEFAULT FALSE,
+                    bias_url        TEXT DEFAULT '',
+                    bias_cache_ttl  DOUBLE PRECISION DEFAULT 300.0,
+                    bias_min_confidence INT DEFAULT 3,
                     updated_at      TIMESTAMPTZ DEFAULT NOW()
                 );
 
@@ -114,6 +118,28 @@ class Store:
 
                 CREATE INDEX IF NOT EXISTS idx_trail_snap_deal ON trail_snapshots(deal_id, ts DESC);
                 CREATE INDEX IF NOT EXISTS idx_trail_snap_epic ON trail_snapshots(epic, ts DESC);
+
+                CREATE TABLE IF NOT EXISTS bias_signals (
+                    id              BIGSERIAL PRIMARY KEY,
+                    instrument      TEXT NOT NULL,
+                    epic            TEXT NOT NULL DEFAULT '',
+                    bias            TEXT NOT NULL DEFAULT 'NEUTRAL',
+                    confidence      INT NOT NULL DEFAULT 1,
+                    current_price   DOUBLE PRECISION,
+                    price_target    DOUBLE PRECISION,
+                    stop_loss_price DOUBLE PRECISION,
+                    key_support     DOUBLE PRECISION,
+                    key_resistance  DOUBLE PRECISION,
+                    catalyst        TEXT DEFAULT '',
+                    risk            TEXT DEFAULT '',
+                    trade_idea      TEXT DEFAULT '',
+                    market_context  TEXT DEFAULT '',
+                    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    expires_at      TIMESTAMPTZ
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_bias_instrument ON bias_signals(instrument, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_bias_epic ON bias_signals(epic, created_at DESC);
             """)
 
     async def _migrate(self) -> None:
@@ -151,6 +177,15 @@ class Store:
                     "ALTER TABLE bot_config ADD COLUMN manual_mode BOOLEAN DEFAULT FALSE"
                 )
                 logger.info("Migrated: added manual_mode to bot_config")
+            if "bias_filter_on" not in existing:
+                await conn.execute("""
+                    ALTER TABLE bot_config
+                    ADD COLUMN bias_filter_on BOOLEAN DEFAULT FALSE,
+                    ADD COLUMN bias_url TEXT DEFAULT '',
+                    ADD COLUMN bias_cache_ttl DOUBLE PRECISION DEFAULT 300.0,
+                    ADD COLUMN bias_min_confidence INT DEFAULT 3
+                """)
+                logger.info("Migrated: added bias columns to bot_config")
 
             # Migrate symbol_config: add strategy column
             sym_cols = await conn.fetch(
@@ -430,6 +465,81 @@ class Store:
             else:
                 rows = await conn.fetch(
                     "SELECT * FROM trail_snapshots ORDER BY ts DESC LIMIT $1", limit,
+                )
+            return [dict(r) for r in rows]
+
+    # -- bias signals ----------------------------------------------------------
+
+    async def save_bias_signal(
+        self,
+        instrument: str,
+        epic: str,
+        bias: str,
+        confidence: int,
+        current_price: float | None = None,
+        price_target: float | None = None,
+        stop_loss_price: float | None = None,
+        key_support: float | None = None,
+        key_resistance: float | None = None,
+        catalyst: str = "",
+        risk: str = "",
+        trade_idea: str = "",
+        market_context: str = "",
+        expires_at: datetime | None = None,
+    ) -> int:
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(
+                """INSERT INTO bias_signals
+                   (instrument, epic, bias, confidence, current_price, price_target,
+                    stop_loss_price, key_support, key_resistance, catalyst, risk,
+                    trade_idea, market_context, expires_at)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+                   RETURNING id""",
+                instrument, epic, bias.upper(), confidence, current_price,
+                price_target, stop_loss_price, key_support, key_resistance,
+                catalyst, risk, trade_idea, market_context, expires_at,
+            )
+
+    async def get_latest_bias(self, epic: str | None = None, instrument: str | None = None) -> dict | None:
+        async with self.pool.acquire() as conn:
+            if epic:
+                row = await conn.fetchrow(
+                    """SELECT * FROM bias_signals WHERE epic = $1
+                       AND (expires_at IS NULL OR expires_at > NOW())
+                       ORDER BY created_at DESC LIMIT 1""",
+                    epic,
+                )
+            elif instrument:
+                row = await conn.fetchrow(
+                    """SELECT * FROM bias_signals WHERE instrument = $1
+                       AND (expires_at IS NULL OR expires_at > NOW())
+                       ORDER BY created_at DESC LIMIT 1""",
+                    instrument,
+                )
+            else:
+                return None
+            return dict(row) if row else None
+
+    async def get_all_latest_biases(self) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT DISTINCT ON (instrument) *
+                FROM bias_signals
+                WHERE expires_at IS NULL OR expires_at > NOW()
+                ORDER BY instrument, created_at DESC
+            """)
+            return [dict(r) for r in rows]
+
+    async def get_bias_history(self, instrument: str | None = None, limit: int = 50) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            if instrument:
+                rows = await conn.fetch(
+                    "SELECT * FROM bias_signals WHERE instrument = $1 ORDER BY created_at DESC LIMIT $2",
+                    instrument, limit,
+                )
+            else:
+                rows = await conn.fetch(
+                    "SELECT * FROM bias_signals ORDER BY created_at DESC LIMIT $1", limit,
                 )
             return [dict(r) for r in rows]
 

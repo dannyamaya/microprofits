@@ -22,6 +22,8 @@ class BotConfigUpdate(BaseModel):
     safety_loss_threshold: float | None = None
     safety_cooldown: float | None = None
     manual_mode: bool | None = None
+    bias_filter_on: bool | None = None
+    bias_min_confidence: int | None = None
 
 
 class SymbolConfigUpdate(BaseModel):

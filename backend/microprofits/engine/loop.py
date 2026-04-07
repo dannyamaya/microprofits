@@ -17,6 +17,7 @@ from microprofits.engine.position_tracker import PositionTracker
 from microprofits.strategy.candle_history import CandleHistory
 from microprofits.strategy.scalper import MomentumScalper
 from microprofits.strategy.asian_range import AsianRangeBreakout
+from microprofits.strategy.bias_provider import BiasProvider
 from microprofits.engine.pct_trailer import PctTrailer
 
 
@@ -35,6 +36,7 @@ class ScalperLoop:
         self._histories: dict[str, CandleHistory] = {}
         self._min_stop_distances: dict[str, float] = {}
         self._pct_trailer = PctTrailer(store)
+        self.bias_provider = BiasProvider(store)
         self._running = False
         self._task: asyncio.Task | None = None
 
@@ -284,4 +286,32 @@ class ScalperLoop:
                 )
 
             if signal:
-                await tracker.open_position(signal)
+                # 4. BillionBot bias gate — block entries against strong sentiment
+                if config.get("bias_filter_on", False):
+                    bias = await self.bias_provider.get_bias(epic)
+                    if bias:
+                        min_conf = config.get("bias_min_confidence", 3)
+                        blocked = bias.blocks_entry(signal.direction, min_conf)
+                        if blocked:
+                            logger.info(
+                                f"{epic}: BIAS BLOCKED {signal.direction} — "
+                                f"BillionBot says {bias.direction}({bias.confidence}): {bias.catalyst[:80]}"
+                            )
+                            await self.store.log_audit(
+                                epic,
+                                "BIAS_BLOCKED",
+                                {
+                                    "direction": signal.direction,
+                                    "bias": bias.direction,
+                                    "confidence": bias.confidence,
+                                    "catalyst": bias.catalyst[:200],
+                                },
+                            )
+                            signal = None
+                        else:
+                            logger.debug(
+                                f"{epic}: Bias OK — {bias.direction}({bias.confidence}) allows {signal.direction}"
+                            )
+
+                if signal:
+                    await tracker.open_position(signal)
