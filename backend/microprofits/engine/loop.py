@@ -17,6 +17,8 @@ from microprofits.engine.position_tracker import PositionTracker
 from microprofits.strategy.candle_history import CandleHistory
 from microprofits.strategy.scalper import MomentumScalper
 from microprofits.strategy.asian_range import AsianRangeBreakout
+from microprofits.strategy.bias_provider import BiasProvider
+from microprofits.strategy.x_headlines import XHeadlinesScraper
 from microprofits.engine.pct_trailer import PctTrailer
 
 
@@ -35,6 +37,9 @@ class ScalperLoop:
         self._histories: dict[str, CandleHistory] = {}
         self._min_stop_distances: dict[str, float] = {}
         self._pct_trailer = PctTrailer(store)
+        self.bias_provider = BiasProvider(store)
+        self.x_scraper = XHeadlinesScraper(store)
+        self._headline_task: asyncio.Task | None = None
         self._running = False
         self._task: asyncio.Task | None = None
 
@@ -87,11 +92,26 @@ class ScalperLoop:
         await self._pct_trailer.start()
 
         self._task = asyncio.create_task(self._run())
+
+        # Start headline fetcher if configured
+        config = await self.store.get_bot_config()
+        x_token = config.get("x_bearer_token", "")
+        if x_token:
+            self.x_scraper.update_token(x_token)
+            self._headline_task = asyncio.create_task(self._headline_loop())
+            logger.info("X headline fetcher started")
+
         logger.info("Scalper loop started")
 
     async def stop(self) -> None:
         self._running = False
         await self._pct_trailer.stop()
+        if self._headline_task:
+            self._headline_task.cancel()
+            try:
+                await self._headline_task
+            except asyncio.CancelledError:
+                pass
         if self._task:
             self._task.cancel()
             try:
@@ -197,6 +217,19 @@ class ScalperLoop:
                 logger.exception(f"Unexpected error in loop: {e}")
                 await asyncio.sleep(5)
 
+    async def _headline_loop(self) -> None:
+        """Periodically fetch new X headlines (every 5 minutes)."""
+        while self._running:
+            try:
+                new = await self.x_scraper.fetch_new_headlines()
+                if new:
+                    logger.info(f"Fetched {new} new X headlines")
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"Headline fetch error: {e}")
+            await asyncio.sleep(300)  # 5 minutes
+
     async def _process_epic(
         self, epic: str, config: dict, symbol_cfg: dict, strategy: str = "scalper", account_id: str = ""
     ) -> None:
@@ -284,4 +317,32 @@ class ScalperLoop:
                 )
 
             if signal:
-                await tracker.open_position(signal)
+                # 4. BillionBot bias gate — block entries against strong sentiment
+                if config.get("bias_filter_on", False):
+                    bias = await self.bias_provider.get_bias(epic)
+                    if bias:
+                        min_conf = config.get("bias_min_confidence", 3)
+                        blocked = bias.blocks_entry(signal.direction, min_conf)
+                        if blocked:
+                            logger.info(
+                                f"{epic}: BIAS BLOCKED {signal.direction} — "
+                                f"BillionBot says {bias.direction}({bias.confidence}): {bias.catalyst[:80]}"
+                            )
+                            await self.store.log_audit(
+                                epic,
+                                "BIAS_BLOCKED",
+                                {
+                                    "direction": signal.direction,
+                                    "bias": bias.direction,
+                                    "confidence": bias.confidence,
+                                    "catalyst": bias.catalyst[:200],
+                                },
+                            )
+                            signal = None
+                        else:
+                            logger.debug(
+                                f"{epic}: Bias OK — {bias.direction}({bias.confidence}) allows {signal.direction}"
+                            )
+
+                if signal:
+                    await tracker.open_position(signal)
