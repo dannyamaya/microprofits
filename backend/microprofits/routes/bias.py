@@ -5,7 +5,9 @@ from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
-from microprofits.strategy.bias_provider import INSTRUMENT_TO_EPIC
+from loguru import logger
+
+from microprofits.strategy.bias_provider import INSTRUMENT_TO_EPIC, BiasSignal
 
 router = APIRouter(prefix="/api", tags=["bias"])
 
@@ -73,7 +75,89 @@ async def push_bias(request: Request, body: BiasReportInput):
             },
         )
 
+        # Discord notification for signal
+        await _notify_discord_signal(request, sig)
+
+        # Trigger bias strategy trade if enabled
+        trade_result = await _try_bias_trade(request, sig, epic, signal_id)
+        if trade_result:
+            saved[-1]["trade"] = trade_result
+            await _notify_discord_trade(request, trade_result)
+
     return {"saved": saved, "count": len(saved)}
+
+
+async def _try_bias_trade(
+    request: Request, sig: BiasSignalInput, epic: str, signal_id: int
+) -> dict | None:
+    """Attempt to open a bias trade from the incoming signal."""
+    loop = getattr(request.app.state, "loop", None)
+    if not loop:
+        return None
+
+    bias_strategy = getattr(loop, "bias_strategy", None)
+    if not bias_strategy:
+        return None
+
+    bias_client = getattr(loop, "_bias_client", None)
+    if not bias_client:
+        return None
+
+    bias_signal = BiasSignal(
+        instrument=sig.instrument.upper(),
+        epic=epic,
+        direction=sig.bias.upper(),
+        confidence=max(1, min(5, sig.confidence)),
+        current_price=sig.current_price,
+        price_target=sig.price_target,
+        stop_loss_price=sig.stop_loss_price,
+        key_support=sig.key_support,
+        key_resistance=sig.key_resistance,
+        catalyst=sig.catalyst,
+        risk=sig.risk,
+        trade_idea=sig.trade_idea,
+    )
+
+    try:
+        result = await bias_strategy.process_signal(bias_signal, signal_id, bias_client)
+        return result
+    except Exception as e:
+        logger.error(f"Bias strategy error for {epic}: {e}")
+        return None
+
+
+async def _notify_discord_signal(request: Request, sig: BiasSignalInput) -> None:
+    """Send bias signal to Discord."""
+    loop = getattr(request.app.state, "loop", None)
+    discord = getattr(loop, "discord", None) if loop else None
+    if not discord or not discord.enabled:
+        return
+    try:
+        await discord.notify_bias_signal({
+            "instrument": sig.instrument,
+            "bias": sig.bias,
+            "confidence": sig.confidence,
+            "current_price": sig.current_price,
+            "price_target": sig.price_target,
+            "stop_loss_price": sig.stop_loss_price,
+            "catalyst": sig.catalyst,
+            "risk": sig.risk,
+            "trade_idea": sig.trade_idea,
+        })
+    except Exception as e:
+        logger.warning(f"Discord signal notification failed: {e}")
+
+
+async def _notify_discord_trade(request: Request, trade: dict) -> None:
+    """Send trade execution to Discord."""
+    loop = getattr(request.app.state, "loop", None)
+    discord = getattr(loop, "discord", None) if loop else None
+    if not discord or not discord.enabled:
+        return
+    try:
+        await discord.notify_bias_trade(trade)
+    except Exception as e:
+        logger.warning(f"Discord trade notification failed: {e}")
 
 
 @router.post("/bias/signal")

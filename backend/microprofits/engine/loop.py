@@ -11,6 +11,7 @@ from loguru import logger
 SCALPER_SAFE_HOURS: frozenset[int] = frozenset({0, 1, 6, 13, 14, 15, 16, 19})
 
 from microprofits.api.rest_client import RestClient
+from microprofits.config.settings import settings
 from microprofits.api.exceptions import RateLimitError, CapitalAPIError
 from microprofits.data.store import Store
 from microprofits.engine.position_tracker import PositionTracker
@@ -18,6 +19,8 @@ from microprofits.strategy.candle_history import CandleHistory
 from microprofits.strategy.scalper import MomentumScalper
 from microprofits.strategy.asian_range import AsianRangeBreakout
 from microprofits.strategy.bias_provider import BiasProvider
+from microprofits.strategy.bias_strategy import BiasStrategy
+from microprofits.strategy.discord_notifier import DiscordNotifier
 from microprofits.strategy.x_headlines import XHeadlinesScraper
 from microprofits.engine.pct_trailer import PctTrailer
 
@@ -38,6 +41,12 @@ class ScalperLoop:
         self._min_stop_distances: dict[str, float] = {}
         self._pct_trailer = PctTrailer(store)
         self.bias_provider = BiasProvider(store)
+        self.bias_strategy: BiasStrategy | None = None
+        self.discord = DiscordNotifier()
+        self._bias_client: RestClient | None = None
+        self._bias_tracker: PositionTracker | None = None
+        self._bias_monitor_task: asyncio.Task | None = None
+        self._bias_expired_logged: set[str] = set()  # deal_ids already logged as expired
         self.x_scraper = XHeadlinesScraper(store)
         self._headline_task: asyncio.Task | None = None
         self._running = False
@@ -91,11 +100,39 @@ class ScalperLoop:
             self._pct_trailer.register_client(acct_id, acct_client)
         await self._pct_trailer.start()
 
+        # Initialize bias strategy client
+        try:
+            bias_config = await self.store.get_bias_config()
+            bias_account_id = bias_config.get("account_id", "")
+            if bias_account_id:
+                if bias_account_id in self._clients:
+                    self._bias_client = self._clients[bias_account_id]
+                    self._bias_tracker = self._trackers[bias_account_id]
+                else:
+                    bias_client = RestClient(account_id=bias_account_id)
+                    await bias_client.start()
+                    self._clients[bias_account_id] = bias_client
+                    self._bias_client = bias_client
+                    self._bias_tracker = PositionTracker(bias_client, self.store)
+                    self._trackers[bias_account_id] = self._bias_tracker
+                    await self._bias_tracker.recover()
+                    self._pct_trailer.register_client(bias_account_id, bias_client)
+                self.bias_strategy = BiasStrategy(self.store)
+                self._bias_monitor_task = asyncio.create_task(self._bias_monitor_loop())
+                # Discord: prefer .env, fall back to DB
+                discord_url = settings.discord_webhook_url or bias_config.get("discord_webhook_url", "")
+                if discord_url:
+                    self.discord.update_url(discord_url)
+                    logger.info("Discord notifier configured for bias strategy")
+                logger.info(f"Bias strategy initialized (account={bias_account_id})")
+        except Exception as e:
+            logger.error(f"Failed to initialize bias strategy: {e}")
+
         self._task = asyncio.create_task(self._run())
 
-        # Start headline fetcher if configured
+        # Start headline fetcher if configured — prefer .env, fall back to DB
         config = await self.store.get_bot_config()
-        x_token = config.get("x_bearer_token", "")
+        x_token = settings.x_bearer_token or config.get("x_bearer_token", "")
         if x_token:
             self.x_scraper.update_token(x_token)
             self._headline_task = asyncio.create_task(self._headline_loop())
@@ -106,6 +143,12 @@ class ScalperLoop:
     async def stop(self) -> None:
         self._running = False
         await self._pct_trailer.stop()
+        if self._bias_monitor_task:
+            self._bias_monitor_task.cancel()
+            try:
+                await self._bias_monitor_task
+            except asyncio.CancelledError:
+                pass
         if self._headline_task:
             self._headline_task.cancel()
             try:
@@ -229,6 +272,99 @@ class ScalperLoop:
             except Exception as e:
                 logger.warning(f"Headline fetch error: {e}")
             await asyncio.sleep(300)  # 5 minutes
+
+    async def _bias_monitor_loop(self) -> None:
+        """Monitor bias positions for server-side closes and signal expiry (every 5s)."""
+        while self._running:
+            try:
+                if not self._bias_client or not self._bias_tracker:
+                    await asyncio.sleep(5)
+                    continue
+
+                # Get all open bias trades from DB
+                open_trades = await self.store.get_open_bias_trades()
+                if not open_trades:
+                    await asyncio.sleep(5)
+                    continue
+
+                # Get live positions from bias account
+                try:
+                    live_positions = await self._bias_client.get_positions()
+                except Exception as e:
+                    logger.error(f"Bias monitor: failed to get positions: {e}")
+                    await asyncio.sleep(5)
+                    continue
+
+                live_map = {p.deal_id: p for p in live_positions}
+
+                for trade in open_trades:
+                    deal_id = trade["deal_id"]
+                    epic = trade["epic"]
+
+                    live = live_map.get(deal_id)
+                    if live is None:
+                        # Position closed server-side (TP or SL hit)
+                        entry_price = trade["entry_price"]
+                        sl = trade.get("stop_level")
+                        tp = trade.get("profit_level")
+
+                        # Estimate PnL
+                        if tp and sl:
+                            direction = trade["direction"]
+                            size = trade["size"]
+                            # Guess based on which level was likely hit
+                            if direction == "BUY":
+                                tp_pnl = (tp - entry_price) * size
+                                sl_pnl = (sl - entry_price) * size
+                            else:
+                                tp_pnl = (entry_price - tp) * size
+                                sl_pnl = (entry_price - sl) * size
+                            # If SL implies loss and TP implies profit, pick based on sign
+                            pnl = tp_pnl if tp_pnl > 0 else sl_pnl
+                        else:
+                            pnl = 0.0
+
+                        exit_reason = "SL_HIT" if pnl < 0 else "TP_HIT"
+                        exit_price = (tp if exit_reason == "TP_HIT" else sl) or entry_price
+
+                        await self.store.save_trade_close(
+                            deal_id=deal_id,
+                            exit_price=exit_price,
+                            pnl=pnl,
+                            exit_reason=exit_reason,
+                        )
+                        await self.store.log_audit(
+                            epic, f"BIAS_{exit_reason}",
+                            {"deal_id": deal_id, "pnl": round(pnl, 2), "strategy": "bias"},
+                            pnl=pnl,
+                        )
+                        self._bias_expired_logged.discard(deal_id)
+                        logger.info(f"BIAS_{exit_reason} {epic} deal={deal_id} pnl={pnl:.2f}")
+
+                        # Discord notification
+                        try:
+                            await self.discord.notify_bias_close(epic, exit_reason, pnl, deal_id)
+                        except Exception:
+                            pass
+                        continue
+
+                    # Position still open — check for signal expiry
+                    if deal_id not in self._bias_expired_logged:
+                        bias = await self.store.get_latest_bias(epic=epic)
+                        if bias is None:
+                            # Signal expired (no valid bias for this epic)
+                            self._bias_expired_logged.add(deal_id)
+                            await self.store.log_audit(
+                                epic, "BIAS_EXPIRED",
+                                {"deal_id": deal_id, "note": "signal expired while position open"},
+                            )
+                            logger.info(f"BIAS_EXPIRED {epic} deal={deal_id}: signal no longer valid")
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Bias monitor error: {e}")
+            await asyncio.sleep(5)
 
     async def _process_epic(
         self, epic: str, config: dict, symbol_cfg: dict, strategy: str = "scalper", account_id: str = ""

@@ -18,6 +18,10 @@ from loguru import logger
 INSTRUMENT_TO_EPIC: dict[str, str] = {
     "NQ": "US100",
     "ES": "US500",
+    "OIL": "OIL_CRUDE",
+    "CL": "OIL_CRUDE",
+    "OIL_CRUDE": "OIL_CRUDE",
+    "US100": "US100",
 }
 EPIC_TO_INSTRUMENT: dict[str, str] = {v: k for k, v in INSTRUMENT_TO_EPIC.items()}
 

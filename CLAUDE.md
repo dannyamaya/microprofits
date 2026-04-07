@@ -56,6 +56,50 @@ Max 1 trade/day. Skip if range > $25 or < $2.
 | Min range skip | $2 | No structure filter |
 | Trades per day | 1 | Resets at midnight UTC |
 
+### 3. Bias Strategy (US100, OIL_CRUDE)
+
+Event-driven strategy powered by BillionBot's news sentiment analysis. When a bias signal arrives via `POST /api/bias` with confidence >= threshold, opens a position immediately at market. Has its own dedicated dashboard at `/#/bias`.
+
+#### How It Works
+
+```
+BillionBot scrapes @DeItaone headlines → Claude analyzes → POST /api/bias
+                                                                ↓
+Bias signal arrives → check confidence >= 3 → check instrument enabled
+                                                                ↓
+Resolve direction (BULLISH→BUY, BEARISH→SELL, flip if inverted)
+                                                                ↓
+Check no existing position for this epic → margin check → OPEN
+                                                                ↓
+If signal has SL+TP → server-side exit on Capital.com
+If missing          → PctTrailer with configurable trail_pct
+```
+
+#### Key Rules
+
+- **OIL_CRUDE is inverted**: BULLISH bias = SELL, BEARISH bias = BUY (configurable per instrument)
+- **One position per signal**: won't open if already positioned for that epic
+- **HOLD on contradiction**: if bias flips while a position is open, keeps the existing position
+- **NEUTRAL = no trade**: NEUTRAL bias signals are skipped
+- **Margin check**: pre-flight balance check before opening
+- **Signal expiry**: logs BIAS_EXPIRED in audit when signal TTL passes with position still open (does NOT auto-close)
+- **Separate account**: trades on the `bias` demo account ($11,000)
+
+#### Key Parameters
+
+| Parameter | Default | Location | Notes |
+|-----------|---------|----------|-------|
+| enabled | false | bias_config | Master toggle |
+| confidence_threshold | 3 | bias_config | Min confidence (1-5) to enter |
+| trail_pct | 70.0 | bias_config | Global fallback trail % |
+| OIL_CRUDE trail_pct | 65.0 | bias_instruments | Per-instrument override |
+| OIL_CRUDE num_contracts | 0.5 | bias_instruments | Smaller size (higher dollar-risk) |
+| US100 num_contracts | 1.0 | bias_instruments | Standard size |
+
+#### Dashboard (`/#/bias`)
+
+Separate frontend page showing: current bias signals with direction/confidence/targets, INVERTED badge on OIL, open positions with signal expiry status, X/Twitter headlines feed, trade history, performance stats, audit log, and full configuration controls.
+
 ## Tech Stack
 
 - **Backend**: Python 3.11, FastAPI, asyncpg, httpx
@@ -78,7 +122,9 @@ backend/microprofits/
 frontend/src/
 ├── lib/api.ts     Typed fetch wrappers
 ├── components/    Header, ConfigPanel, PositionTable, PnlSummary, TradeHistory, Heatmap
-└── App.tsx        Main dashboard (polls every 5s)
+├── pages/         BiasPage (bias dashboard at /#/bias)
+├── App.tsx        Main scalper dashboard (polls every 5s)
+└── main.tsx       Hash-based router (App vs BiasPage)
 ```
 
 ## Running Locally
@@ -117,6 +163,7 @@ Each symbol can target a different Capital.com account via `account_id` in `symb
 |-------------|-----------|--------|----------|--------|
 | `microprofits` | `315494510724722974` | US100 | scalper | ~$9,900 |
 | `asian_range` | `315701137306366238` | GOLD | asian_range | $1,000 |
+| `bias` | `316882029974466846` | US100, OIL_CRUDE | bias | $11,000 |
 
 Default account (from `.env` `CAPITAL_ACCOUNT_ID`) is `microprofits`. Symbols with a different `account_id` get their own `RestClient` + `PositionTracker`.
 
@@ -152,8 +199,12 @@ The schedule filter does NOT affect position monitoring — SL/TP hits are still
 |-------|---------|
 | `bot_config` | Singleton config row (profit_target, stop_loss, max_positions, etc.) |
 | `symbol_config` | Per-instrument config + strategy selection (US100=scalper, GOLD=asian_range) |
-| `trades` | Every position open + close with P&L |
-| `audit_log` | All bot decisions (ENTRY, BREAKEVEN, TRAIL_MOVE, SL_HIT, etc.) |
+| `trades` | Every position open + close with P&L. `strategy` column tags each trade (scalper/asian_range/bias) |
+| `audit_log` | All bot decisions (ENTRY, BREAKEVEN, TRAIL_MOVE, SL_HIT, BIAS_ENTRY, BIAS_BLOCKED, etc.) |
+| `bias_config` | Singleton config for bias strategy (enabled, confidence_threshold, trail_pct, account_id) |
+| `bias_instruments` | Per-instrument bias settings (enabled, inverted, num_contracts, trail_pct) |
+| `bias_signals` | BillionBot sentiment signals with direction, confidence, price targets, expiry |
+| `x_headlines` | X/Twitter headlines from @DeItaone for news analysis |
 
 ## Configuration (all editable from dashboard)
 
@@ -180,6 +231,10 @@ The schedule filter does NOT affect position monitoring — SL/TP hits are still
 - **Independent position tracking** — each position has its own `trail_locks` counter, entry price, and SL level.
 - **Crash recovery** — on restart, reconciles DB trades vs live Capital.com positions. SL is server-side so positions are protected even if bot is down.
 - **Rate limit safe** — each symbol fetches only 3 candles per poll (full history only on startup). With 2 symbols at 3s poll: ~4 requests/3s = ~1.3 req/s, well within Capital.com's ~10 req/s safe limit. Each account has its own API session so rate limits are independent.
+- **Bias strategy is event-driven** — unlike scalper/asian_range which poll for entries, the bias strategy reacts to incoming signals via `POST /api/bias`. The engine loop only monitors bias positions for server-side closes (TP/SL hit) and signal expiry, not for entry conditions.
+- **Bias instrument inversion** — OIL_CRUDE inverts the bias direction (BULLISH → SELL) because oil futures often move inversely to equity-driven sentiment. This is configurable per instrument from the dashboard.
+- **Bias trail fallback** — when a signal provides SL+TP, Capital.com handles exits server-side. When missing, positions are registered with PctTrailer using a looser trail (70% default, 65% for OIL) since bias trades are swing-style (hours) vs scalper (seconds).
+- **Separate bias dashboard** — the bias strategy has its own frontend page (`/#/bias`) with independent polling, config, and display. Hash-based routing (no React Router dependency) switches between scalper and bias pages.
 
 ## Common Operations
 

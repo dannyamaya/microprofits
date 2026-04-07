@@ -24,7 +24,7 @@ class BotConfigUpdate(BaseModel):
     manual_mode: bool | None = None
     bias_filter_on: bool | None = None
     bias_min_confidence: int | None = None
-    x_bearer_token: str | None = None
+    # x_bearer_token removed — use .env X_BEARER_TOKEN instead
 
 
 class SymbolConfigUpdate(BaseModel):
@@ -41,7 +41,10 @@ class SymbolConfigUpdate(BaseModel):
 @router.get("/config")
 async def get_config(request: Request):
     store = request.app.state.store
-    return await store.get_bot_config()
+    config = await store.get_bot_config()
+    # Redact secrets from API response
+    config.pop("x_bearer_token", None)
+    return config
 
 
 @router.put("/config")

@@ -155,6 +155,26 @@ class Store:
 
                 CREATE INDEX IF NOT EXISTS idx_headlines_created ON x_headlines(created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_headlines_account ON x_headlines(account, created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS bias_config (
+                    id                      INT PRIMARY KEY DEFAULT 1,
+                    enabled                 BOOLEAN DEFAULT FALSE,
+                    confidence_threshold    INT DEFAULT 3,
+                    account_id              TEXT DEFAULT '316882029974466846',
+                    on_contradicting_bias   TEXT DEFAULT 'HOLD',
+                    trail_pct               DOUBLE PRECISION DEFAULT 70.0,
+                    discord_webhook_url     TEXT DEFAULT '',
+                    updated_at              TIMESTAMPTZ DEFAULT NOW()
+                );
+
+                CREATE TABLE IF NOT EXISTS bias_instruments (
+                    epic            TEXT PRIMARY KEY,
+                    enabled         BOOLEAN DEFAULT TRUE,
+                    inverted        BOOLEAN DEFAULT FALSE,
+                    num_contracts   DOUBLE PRECISION DEFAULT 1.0,
+                    trail_pct       DOUBLE PRECISION,
+                    updated_at      TIMESTAMPTZ DEFAULT NOW()
+                );
             """)
 
     async def _migrate(self) -> None:
@@ -228,6 +248,28 @@ class Store:
                 )
                 logger.info("Migrated: added trail_pct column to symbol_config")
 
+            # Migrate bias_config: add discord_webhook_url
+            bias_cols = await conn.fetch(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = 'bias_config'"
+            )
+            bias_existing = {r["column_name"] for r in bias_cols}
+            if bias_existing and "discord_webhook_url" not in bias_existing:
+                await conn.execute(
+                    "ALTER TABLE bias_config ADD COLUMN discord_webhook_url TEXT DEFAULT ''"
+                )
+                logger.info("Migrated: added discord_webhook_url to bias_config")
+
+            # Migrate trades: add strategy column
+            trade_cols = await conn.fetch(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = 'trades'"
+            )
+            trade_existing = {r["column_name"] for r in trade_cols}
+            if "strategy" not in trade_existing:
+                await conn.execute(
+                    "ALTER TABLE trades ADD COLUMN strategy TEXT DEFAULT 'scalper'"
+                )
+                logger.info("Migrated: added strategy column to trades")
+
     async def _seed_defaults(self) -> None:
         async with self.pool.acquire() as conn:
             exists = await conn.fetchval("SELECT 1 FROM bot_config WHERE id = 1")
@@ -252,6 +294,34 @@ class Store:
                     "INSERT INTO symbol_config (epic, enabled, strategy, account_id) VALUES ('GOLD', TRUE, 'asian_range', '315701137306366238')"
                 )
                 logger.info("Seeded GOLD (XAUUSD) symbol config with asian_range account")
+
+            # Bias config singleton
+            exists = await conn.fetchval("SELECT 1 FROM bias_config WHERE id = 1")
+            if not exists:
+                await conn.execute(
+                    "INSERT INTO bias_config (id, discord_webhook_url) VALUES (1, $1)",
+                    "https://discord.com/api/webhooks/1491165744367534080/r2SxnqA7dpwofdO50gfzAemhw25tAwbzz0pHrIRlJmbOAtEOMpsyK20tDRiAvdpsg1vM",
+                )
+                logger.info("Seeded default bias_config with Discord webhook")
+
+            # Bias instruments
+            exists = await conn.fetchval(
+                "SELECT 1 FROM bias_instruments WHERE epic = 'US100'"
+            )
+            if not exists:
+                await conn.execute(
+                    "INSERT INTO bias_instruments (epic, enabled, inverted, num_contracts) VALUES ('US100', TRUE, FALSE, 1.0)"
+                )
+                logger.info("Seeded bias instrument US100")
+
+            exists = await conn.fetchval(
+                "SELECT 1 FROM bias_instruments WHERE epic = 'OIL_CRUDE'"
+            )
+            if not exists:
+                await conn.execute(
+                    "INSERT INTO bias_instruments (epic, enabled, inverted, num_contracts, trail_pct) VALUES ('OIL_CRUDE', TRUE, TRUE, 0.5, 65.0)"
+                )
+                logger.info("Seeded bias instrument OIL_CRUDE (inverted)")
 
     # -- bot config ----------------------------------------------------------
 
@@ -316,11 +386,12 @@ class Store:
         entry_price: float,
         stop_level: float | None,
         profit_level: float | None,
+        strategy: str = "scalper",
     ) -> int:
         async with self.pool.acquire() as conn:
             return await conn.fetchval(
-                """INSERT INTO trades (epic, deal_id, direction, size, entry_price, stop_level, profit_level)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id""",
+                """INSERT INTO trades (epic, deal_id, direction, size, entry_price, stop_level, profit_level, strategy)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id""",
                 epic,
                 deal_id,
                 direction,
@@ -328,6 +399,7 @@ class Store:
                 entry_price,
                 stop_level,
                 profit_level,
+                strategy,
             )
 
     async def save_trade_close(
@@ -648,6 +720,108 @@ class Store:
                     "SELECT * FROM bias_signals ORDER BY created_at DESC LIMIT $1", limit,
                 )
             return [dict(r) for r in rows]
+
+    # -- bias config -----------------------------------------------------------
+
+    async def get_bias_config(self) -> dict:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM bias_config WHERE id = 1")
+            return dict(row) if row else {}
+
+    async def update_bias_config(self, **fields) -> dict:
+        if not fields:
+            return await self.get_bias_config()
+        sets = ", ".join(f"{k} = ${i+1}" for i, k in enumerate(fields.keys()))
+        vals = list(fields.values())
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                f"UPDATE bias_config SET {sets}, updated_at = NOW() WHERE id = 1",
+                *vals,
+            )
+        return await self.get_bias_config()
+
+    # -- bias instruments ------------------------------------------------------
+
+    async def get_bias_instruments(self) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("SELECT * FROM bias_instruments ORDER BY epic")
+            return [dict(r) for r in rows]
+
+    async def get_bias_instrument(self, epic: str) -> dict | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM bias_instruments WHERE epic = $1", epic
+            )
+            return dict(row) if row else None
+
+    async def update_bias_instrument(self, epic: str, **fields) -> dict | None:
+        if not fields:
+            return await self.get_bias_instrument(epic)
+        sets = ", ".join(f"{k} = ${i+2}" for i, k in enumerate(fields.keys()))
+        vals = list(fields.values())
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                f"UPDATE bias_instruments SET {sets}, updated_at = NOW() WHERE epic = $1",
+                epic,
+                *vals,
+            )
+        return await self.get_bias_instrument(epic)
+
+    # -- bias trades -----------------------------------------------------------
+
+    async def get_open_bias_trades(self, epic: str | None = None) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            if epic:
+                rows = await conn.fetch(
+                    "SELECT * FROM trades WHERE closed_at IS NULL AND strategy = 'bias' AND epic = $1 ORDER BY opened_at",
+                    epic,
+                )
+            else:
+                rows = await conn.fetch(
+                    "SELECT * FROM trades WHERE closed_at IS NULL AND strategy = 'bias' ORDER BY opened_at"
+                )
+            return [dict(r) for r in rows]
+
+    async def get_bias_trade_history(self, limit: int = 50) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT * FROM trades WHERE closed_at IS NOT NULL AND strategy = 'bias'
+                   ORDER BY closed_at DESC LIMIT $1""",
+                limit,
+            )
+            return [dict(r) for r in rows]
+
+    async def get_bias_trade_stats(self) -> dict:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT
+                    COUNT(*) as total,
+                    COUNT(*) FILTER (WHERE pnl > 0) as wins,
+                    COUNT(*) FILTER (WHERE pnl <= 0) as losses,
+                    COALESCE(SUM(pnl), 0) as total_pnl,
+                    COALESCE(AVG(pnl) FILTER (WHERE pnl > 0), 0) as avg_win,
+                    COALESCE(AVG(pnl) FILTER (WHERE pnl <= 0), 0) as avg_loss,
+                    COALESCE(MAX(pnl), 0) as best_trade,
+                    COALESCE(MIN(pnl), 0) as worst_trade
+                FROM trades
+                WHERE closed_at IS NOT NULL AND strategy = 'bias'
+            """)
+            d = dict(row) if row else {}
+            total = d.get("total", 0)
+            d["win_rate"] = (d.get("wins", 0) / total * 100) if total > 0 else 0
+            return d
+
+    async def get_bias_audit(self, limit: int = 100) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT * FROM audit_log
+                   WHERE event LIKE 'BIAS_%'
+                   ORDER BY ts DESC LIMIT $1""",
+                limit,
+            )
+            return [dict(r) for r in rows]
+
+    # -- audit ---------------------------------------------------------------
 
     async def get_audit_log(self, limit: int = 100, epic: str | None = None) -> list[dict]:
         async with self.pool.acquire() as conn:

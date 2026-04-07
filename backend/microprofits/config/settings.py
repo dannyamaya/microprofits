@@ -9,6 +9,12 @@ class Settings(BaseSettings):
     capital_demo: bool = True
     capital_account_id: str = ""
 
+    # X/Twitter API
+    x_bearer_token: str = ""
+
+    # Discord
+    discord_webhook_url: str = ""
+
     # Database
     database_url: str = "postgresql://microprofits:microprofits_dev@db:5432/microprofits"
 

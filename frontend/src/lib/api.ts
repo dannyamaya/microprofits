@@ -47,3 +47,27 @@ export const getHeatmap = () => request<any[]>("/api/heatmap");
 // Audit
 export const getAudit = (limit = 100) =>
   request<any[]>(`/api/audit?limit=${limit}`);
+
+// Bias Dashboard
+export const getBiasConfig = () => request<any>("/api/bias/config");
+export const updateBiasConfig = (data: Record<string, any>) =>
+  request<any>("/api/bias/config", {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+export const getBiasInstruments = () => request<any[]>("/api/bias/instruments");
+export const updateBiasInstrument = (epic: string, data: Record<string, any>) =>
+  request<any>(`/api/bias/instruments/${epic}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+export const getBiasPositions = () => request<any[]>("/api/bias/positions");
+export const getBiasTrades = (limit = 50) =>
+  request<any[]>(`/api/bias/trades?limit=${limit}`);
+export const getBiasStats = () => request<any>("/api/bias/trades/stats");
+export const getBiasAudit = (limit = 100) =>
+  request<any[]>(`/api/bias/audit?limit=${limit}`);
+export const getBiasAccount = () => request<any>("/api/bias/account");
+export const getBiasSignals = () => request<any>("/api/bias");
+export const getHeadlines = (limit = 60) =>
+  request<any[]>(`/api/headlines?limit=${limit}`);

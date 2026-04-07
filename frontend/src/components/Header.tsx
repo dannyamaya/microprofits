@@ -30,10 +30,26 @@ export default function Header({ status, onRefresh }: Props) {
     return `${h}h ${m}m`;
   };
 
+  const currentPage = window.location.hash === "#/bias" ? "bias" : "scalper";
+
   return (
     <header className="header">
       <div className="header-left">
         <h1>Microprofits</h1>
+        <nav className="header-nav">
+          <a
+            href="#/"
+            className={`nav-link ${currentPage === "scalper" ? "nav-active" : ""}`}
+          >
+            Scalper
+          </a>
+          <a
+            href="#/bias"
+            className={`nav-link ${currentPage === "bias" ? "nav-active" : ""}`}
+          >
+            Bias
+          </a>
+        </nav>
         <span className={`status-badge ${enabled ? "on" : "off"}`}>
           {enabled ? "RUNNING" : "STOPPED"}
         </span>
