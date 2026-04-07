@@ -30,7 +30,13 @@ export default function Header({ status, onRefresh }: Props) {
     return `${h}h ${m}m`;
   };
 
-  const currentPage = window.location.hash === "#/bias" ? "bias" : "scalper";
+  const currentPage = window.location.pathname === "/bias" ? "bias" : "scalper";
+
+  const navigate = (e: React.MouseEvent, path: string) => {
+    e.preventDefault();
+    window.history.pushState({}, "", path);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  };
 
   return (
     <header className="header">
@@ -38,13 +44,15 @@ export default function Header({ status, onRefresh }: Props) {
         <h1>Microprofits</h1>
         <nav className="header-nav">
           <a
-            href="#/"
+            href="/"
+            onClick={(e) => navigate(e, "/")}
             className={`nav-link ${currentPage === "scalper" ? "nav-active" : ""}`}
           >
             Scalper
           </a>
           <a
-            href="#/bias"
+            href="/bias"
+            onClick={(e) => navigate(e, "/bias")}
             className={`nav-link ${currentPage === "bias" ? "nav-active" : ""}`}
           >
             Bias

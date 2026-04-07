@@ -74,8 +74,8 @@ export default function BiasPage() {
         <div className="header-left">
           <h1 className="bias-title">Bias Strategy</h1>
           <nav className="header-nav">
-            <a href="#/" className="nav-link">Scalper</a>
-            <a href="#/bias" className="nav-link nav-active">Bias</a>
+            <a href="/" onClick={(e) => { e.preventDefault(); window.history.pushState({}, "", "/"); window.dispatchEvent(new PopStateEvent("popstate")); }} className="nav-link">Scalper</a>
+            <a href="/bias" className="nav-link nav-active">Bias</a>
           </nav>
           <span className={`status-badge ${config.enabled ? "on" : "off"}`}>
             {config.enabled ? "ENABLED" : "DISABLED"}

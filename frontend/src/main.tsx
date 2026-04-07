@@ -4,15 +4,15 @@ import App from "./App.tsx";
 import BiasPage from "./pages/BiasPage.tsx";
 
 function Router() {
-  const [hash, setHash] = useState(window.location.hash);
+  const [path, setPath] = useState(window.location.pathname);
 
   useEffect(() => {
-    const handler = () => setHash(window.location.hash);
-    window.addEventListener("hashchange", handler);
-    return () => window.removeEventListener("hashchange", handler);
+    const handler = () => setPath(window.location.pathname);
+    window.addEventListener("popstate", handler);
+    return () => window.removeEventListener("popstate", handler);
   }, []);
 
-  if (hash === "#/bias") return <BiasPage />;
+  if (path === "/bias") return <BiasPage />;
   return <App />;
 }
 
