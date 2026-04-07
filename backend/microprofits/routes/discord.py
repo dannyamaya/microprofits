@@ -114,26 +114,43 @@ async def _handle_bias_command(request: Request) -> dict:
         if b.get("stop_loss_price"):
             sl = b["stop_loss_price"]
             parts.append(f"\u2022 SL: ${sl:,.2f}" if sl > 500 else f"\u2022 SL: ${sl:.3f}")
+        if b.get("key_support"):
+            ks = b["key_support"]
+            parts.append(f"\u2022 Support: ${ks:,.2f}" if ks > 500 else f"\u2022 Support: ${ks:.3f}")
+        if b.get("key_resistance"):
+            kr = b["key_resistance"]
+            parts.append(f"\u2022 Resistance: ${kr:,.2f}" if kr > 500 else f"\u2022 Resistance: ${kr:.3f}")
         if b.get("catalyst"):
-            parts.append(f"\u2022 Catalyst: {b['catalyst'][:200]}")
-        if b.get("expires_at"):
+            parts.append(f"\u2022 Catalyst: {b['catalyst'][:300]}")
+        if b.get("risk"):
+            parts.append(f"\u2022 Risk: {b['risk'][:200]}")
+        if b.get("trade_idea"):
+            parts.append(f"\u2022 Trade Idea: {b['trade_idea'][:200]}")
+        if b.get("created_at"):
             from datetime import datetime, timezone
+            created = b["created_at"]
+            if hasattr(created, "timestamp"):
+                # Discord timestamp format: <t:UNIX:R> shows relative time
+                unix_ts = int(created.timestamp())
+                parts.append(f"\u2022 Received: <t:{unix_ts}:R> (<t:{unix_ts}:t>)")
+        if b.get("expires_at"):
             exp = b["expires_at"]
-            if hasattr(exp, "tzinfo"):
-                remaining = (exp - datetime.now(timezone.utc)).total_seconds()
-                if remaining > 0:
-                    h = int(remaining // 3600)
-                    m = int((remaining % 3600) // 60)
-                    parts.append(f"\u2022 Expires in: {h}h {m}m")
-                else:
-                    parts.append("\u2022 **EXPIRED**")
+            if hasattr(exp, "timestamp"):
+                unix_exp = int(exp.timestamp())
+                parts.append(f"\u2022 Expires: <t:{unix_exp}:R>")
 
         lines.append("\n".join(parts))
+
+    # Market context from the most recent signal
+    if biases and biases[0].get("market_context"):
+        ctx = biases[0]["market_context"]
+        if ctx:
+            lines.append(f"**MARKET CONTEXT:**\n{ctx[:400]}")
 
     # Check open positions
     open_trades = await store.get_open_bias_trades()
     if open_trades:
-        lines.append("\n**Open Positions:**")
+        lines.append("**Open Positions:**")
         for t in open_trades:
             lines.append(f"\u2022 {t['direction']} {t['epic']} x{t['size']} @ ${t['entry_price']:,.2f}")
 
