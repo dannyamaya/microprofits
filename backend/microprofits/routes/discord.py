@@ -129,15 +129,12 @@ async def _handle_bias_command(request: Request) -> dict:
         if b.get("created_at"):
             from datetime import datetime, timezone
             created = b["created_at"]
-            if hasattr(created, "timestamp"):
-                # Discord timestamp format: <t:UNIX:R> shows relative time
-                unix_ts = int(created.timestamp())
-                parts.append(f"\u2022 Received: <t:{unix_ts}:R> (<t:{unix_ts}:t>)")
+            if hasattr(created, "strftime"):
+                parts.append(f"\u2022 Created: {created.strftime('%Y-%m-%d %H:%M:%S UTC')}")
         if b.get("expires_at"):
             exp = b["expires_at"]
-            if hasattr(exp, "timestamp"):
-                unix_exp = int(exp.timestamp())
-                parts.append(f"\u2022 Expires: <t:{unix_exp}:R>")
+            if hasattr(exp, "strftime"):
+                parts.append(f"\u2022 Expires: {exp.strftime('%Y-%m-%d %H:%M:%S UTC')}")
 
         lines.append("\n".join(parts))
 
