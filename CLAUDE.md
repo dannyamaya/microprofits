@@ -58,32 +58,74 @@ Max 1 trade/day. Skip if range > $25 or < $2.
 
 ### 3. Bias Strategy (US100, OIL_CRUDE)
 
-Event-driven strategy powered by BillionBot's news sentiment analysis. When a bias signal arrives via `POST /api/bias` with confidence >= threshold, opens a position immediately at market. Has its own dedicated dashboard at `/#/bias`.
+Event-driven strategy powered by BillionBot's news sentiment analysis. When a bias signal arrives via `POST /api/bias` with confidence >= threshold, opens a position immediately at market. Has its own dedicated dashboard at `/bias`, Discord webhook notifications, and a `/bias` slash command.
 
 #### How It Works
 
 ```
 BillionBot scrapes @DeItaone headlines → Claude analyzes → POST /api/bias
                                                                 ↓
-Bias signal arrives → check confidence >= 3 → check instrument enabled
+    1. Save signal to bias_signals table (with TTL expiry)
+    2. Log BIAS_RECEIVED in audit
+    3. Attempt trade via bias_strategy.process_signal():
+       a) Check bias_config.enabled + confidence >= threshold
+       b) Check instrument enabled
+       c) Skip if NEUTRAL
+       d) Resolve direction (BULLISH→BUY, BEARISH→SELL, flip if inverted)
+       e) Check no existing position (one per epic, HOLD on contradiction)
+       f) Pre-flight margin check via Capital.com API
+       g) If inverted: swap SL↔TP (bias levels are from bias perspective)
+       h) Open position → save trade with strategy='bias' → log BIAS_ENTRY
+    4. Send unified Discord message (all instruments + trade actions)
+    5. Return response with signal IDs + trade results
                                                                 ↓
-Resolve direction (BULLISH→BUY, BEARISH→SELL, flip if inverted)
-                                                                ↓
-Check no existing position for this epic → margin check → OPEN
-                                                                ↓
-If signal has SL+TP → server-side exit on Capital.com
-If missing          → PctTrailer with configurable trail_pct
+    Monitor loop (every 5s):
+    - Detect server-side closes (TP/SL hit) → log + Discord notification
+    - Detect signal expiry → log BIAS_EXPIRED (does NOT auto-close)
 ```
+
+#### POST /api/bias Payload
+
+```json
+{
+  "signals": [
+    {
+      "instrument": "NQ",          // mapped to US100 via INSTRUMENT_TO_EPIC
+      "bias": "BEARISH",           // BULLISH, BEARISH, NEUTRAL
+      "confidence": 4,             // 1-5, must be >= threshold (default 3)
+      "current_price": 24229,
+      "price_target": 23800,       // TP level (swapped for inverted instruments)
+      "stop_loss_price": 24400,    // SL level (swapped for inverted instruments)
+      "key_support": 24050,
+      "key_resistance": 24300,
+      "catalyst": "...",
+      "risk": "...",
+      "trade_idea": "...",
+      "ttl_minutes": 240           // signal valid for 4 hours (default)
+    }
+  ],
+  "market_context": "..."
+}
+```
+
+Also accepts single signals via `POST /api/bias/signal` with the same fields (no `signals` array wrapper).
+
+**Instrument mapping** (`INSTRUMENT_TO_EPIC` in `strategy/bias_provider.py`):
+- `NQ` / `US100` → `US100`
+- `OIL` / `CL` / `OIL_CRUDE` → `OIL_CRUDE`
+- `ES` → `US500`
 
 #### Key Rules
 
-- **OIL_CRUDE is inverted**: BULLISH bias = SELL, BEARISH bias = BUY (configurable per instrument)
+- **OIL_CRUDE is inverted**: BULLISH bias = SELL, BEARISH bias = BUY (configurable per instrument). When inverted, SL and TP from the signal are swapped (bias provides levels from its perspective, but we trade the opposite direction)
+- **OIL_CRUDE is Brent**: trades at ~$103 on Capital.com, NOT WTI at ~$62. BillionBot must send correct price levels
 - **One position per signal**: won't open if already positioned for that epic
 - **HOLD on contradiction**: if bias flips while a position is open, keeps the existing position
 - **NEUTRAL = no trade**: NEUTRAL bias signals are skipped
 - **Margin check**: pre-flight balance check before opening
 - **Signal expiry**: logs BIAS_EXPIRED in audit when signal TTL passes with position still open (does NOT auto-close)
-- **Separate account**: trades on the `bias` demo account ($11,000)
+- **Separate account**: trades on the `bias` account ($11,000)
+- **Min deal size**: OIL_CRUDE requires >= 1.0 contracts on Capital.com
 
 #### Key Parameters
 
@@ -91,14 +133,29 @@ If missing          → PctTrailer with configurable trail_pct
 |-----------|---------|----------|-------|
 | enabled | false | bias_config | Master toggle |
 | confidence_threshold | 3 | bias_config | Min confidence (1-5) to enter |
-| trail_pct | 70.0 | bias_config | Global fallback trail % |
-| OIL_CRUDE trail_pct | 65.0 | bias_instruments | Per-instrument override |
-| OIL_CRUDE num_contracts | 0.5 | bias_instruments | Smaller size (higher dollar-risk) |
+| trail_pct | 70.0 | bias_config | Global fallback trail % (when signal has no SL/TP) |
+| OIL_CRUDE trail_pct | 65.0 | bias_instruments | Per-instrument override (more volatile) |
+| OIL_CRUDE num_contracts | 1.0 | bias_instruments | Min deal size on Capital.com |
 | US100 num_contracts | 1.0 | bias_instruments | Standard size |
 
-#### Dashboard (`/#/bias`)
+#### Dashboard (`/bias`)
 
-Separate frontend page showing: current bias signals with direction/confidence/targets, INVERTED badge on OIL, open positions with signal expiry status, X/Twitter headlines feed, trade history, performance stats, audit log, and full configuration controls.
+Separate frontend page (path-based routing via `window.location.pathname`) showing: current bias signals with direction/confidence/targets, INVERTED badge on OIL, open positions with signal expiry status, X/Twitter headlines feed, trade history, performance stats, audit log, and full configuration controls. Notification status (Discord + X token) shown in config panel.
+
+#### Discord Integration
+
+- **Webhook notifications**: unified message per bias report with all instruments, analysis, and trade actions. Also notifies on trade closes (TP/SL hit). Webhook URL in `.env` as `DISCORD_WEBHOOK_URL`
+- **`/bias` slash command**: returns current active bias signals with full detail (direction, confidence, levels, catalyst, risk, trade idea, timestamps, open positions). Uses Discord Interactions Endpoint via Cloudflare Tunnel (HTTPS required)
+- **Setup**: Discord App ID `1479466159366606891`, Interactions Endpoint URL pointed at `https://<tunnel>/api/discord/interactions`. Command registered via `POST /api/discord/register`
+- **Cloudflare Tunnel**: `cloudflared tunnel --url http://localhost:8000` (free quick tunnel, URL changes on restart)
+
+#### Secrets (all in `.env`, never in dashboard)
+
+| Variable | Purpose |
+|----------|---------|
+| `X_BEARER_TOKEN` | X/Twitter API bearer token for @DeItaone headline scraping |
+| `DISCORD_WEBHOOK_URL` | Discord webhook for bias signal/trade notifications |
+| `DISCORD_BOT_TOKEN` | Discord bot token for `/bias` slash command registration |
 
 ## Tech Stack
 
@@ -115,8 +172,8 @@ backend/microprofits/
 ├── config/        Pydantic settings (reads from .env)
 ├── data/          PostgreSQL store (trades, audit, config)
 ├── engine/        Main loop + position tracker with trailing SL
-├── routes/        FastAPI endpoints (status, config, positions, trades, heatmap)
-├── strategy/      Scalper, Asian Range Breakout, EMA filter, candle history
+├── routes/        FastAPI endpoints (status, config, positions, trades, heatmap, bias, discord)
+├── strategy/      Scalper, Asian Range, Bias Strategy, EMA, Discord notifier, X headlines
 └── main.py        FastAPI app with lifespan
 
 frontend/src/
@@ -240,7 +297,7 @@ The schedule filter does NOT affect position monitoring — SL/TP hits are still
 
 ```bash
 # Check logs
-ssh ubuntu@100.101.111.35 "docker logs microprofits-backend-1 --tail 50"
+ssh ubuntu@100.101.111.35 "docker logs microprofits-backend --tail 50"
 
 # Restart
 ssh ubuntu@100.101.111.35 "cd /opt/microprofits && docker compose restart backend"
@@ -253,6 +310,22 @@ curl -X POST http://13.41.3.104:8000/api/bot/stop
 
 # Emergency flatten (close all positions + disable)
 curl -X POST http://13.41.3.104:8000/api/bot/flatten
+
+# Push a bias signal (BillionBot format)
+curl -X POST http://13.41.3.104:8000/api/bias -H 'Content-Type: application/json' \
+  -d '{"signals":[{"instrument":"NQ","bias":"BEARISH","confidence":4,"current_price":24229,"price_target":23800,"stop_loss_price":24400,"key_support":24050,"key_resistance":24300,"catalyst":"...","risk":"...","trade_idea":"..."}],"market_context":"..."}'
+
+# Enable/disable bias strategy
+curl -X PUT http://13.41.3.104:8000/api/bias/config -H 'Content-Type: application/json' -d '{"enabled":true}'
+
+# Check bias positions
+curl http://13.41.3.104:8000/api/bias/positions
+
+# Register Discord /bias command (one-time)
+curl -X POST http://13.41.3.104:8000/api/discord/register
+
+# Start Cloudflare tunnel for Discord interactions (HTTPS required)
+ssh ubuntu@100.101.111.35 "cloudflared tunnel --url http://localhost:8000"
 ```
 
 ## GitHub
