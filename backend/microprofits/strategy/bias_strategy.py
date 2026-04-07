@@ -127,11 +127,19 @@ class BiasStrategy:
 
         # 6. Build order
         num_contracts = instrument.get("num_contracts", 1.0)
-        stop_level = bias_signal.stop_loss_price
-        profit_level = bias_signal.price_target
+        inverted = instrument.get("inverted", False)
 
-        # For SELL direction, SL should be above entry and TP below
-        # The bias signal provides absolute price levels, so they work for both directions
+        # Bias signal provides levels from the bias perspective:
+        #   BULLISH: TP above current price, SL below
+        #   BEARISH: TP below current price, SL above
+        # When inverted, we trade the opposite direction, so SL and TP swap:
+        #   BULLISH + inverted = SELL → SL was below (now needs to be above) = use TP as SL
+        if inverted and bias_signal.stop_loss_price and bias_signal.price_target:
+            stop_level = bias_signal.price_target      # was TP (above) → now SL for SELL
+            profit_level = bias_signal.stop_loss_price  # was SL (below) → now TP for SELL
+        else:
+            stop_level = bias_signal.stop_loss_price
+            profit_level = bias_signal.price_target
 
         has_full_levels = stop_level is not None and profit_level is not None
         use_trail = not has_full_levels
