@@ -19,7 +19,7 @@ from loguru import logger
 from microprofits.strategy.bias_provider import INSTRUMENT_TO_EPIC
 
 DISCORD_APP_ID = "1479466159366606891"
-DISCORD_PUBLIC_KEY = "81bb7064ac7b924a6bd04207319022e53555ee9737cb6962864d6f0098279c"
+DISCORD_PUBLIC_KEY = "81bb7064ac7b924a6bd04207319022e53555ee9737cb6962864d6f0098279cec"
 
 router = APIRouter(prefix="/api/discord", tags=["discord"])
 
