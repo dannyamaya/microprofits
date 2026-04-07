@@ -54,6 +54,7 @@ class Store:
                     bias_url        TEXT DEFAULT '',
                     bias_cache_ttl  DOUBLE PRECISION DEFAULT 300.0,
                     bias_min_confidence INT DEFAULT 3,
+                    x_bearer_token  TEXT DEFAULT '',
                     updated_at      TIMESTAMPTZ DEFAULT NOW()
                 );
 
@@ -140,6 +141,20 @@ class Store:
 
                 CREATE INDEX IF NOT EXISTS idx_bias_instrument ON bias_signals(instrument, created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_bias_epic ON bias_signals(epic, created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS x_headlines (
+                    tweet_id        TEXT PRIMARY KEY,
+                    account         TEXT NOT NULL,
+                    text            TEXT NOT NULL,
+                    created_at      TIMESTAMPTZ NOT NULL,
+                    fetched_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    likes           INT DEFAULT 0,
+                    retweets        INT DEFAULT 0,
+                    replies         INT DEFAULT 0
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_headlines_created ON x_headlines(created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_headlines_account ON x_headlines(account, created_at DESC);
             """)
 
     async def _migrate(self) -> None:
@@ -186,6 +201,11 @@ class Store:
                     ADD COLUMN bias_min_confidence INT DEFAULT 3
                 """)
                 logger.info("Migrated: added bias columns to bot_config")
+            if "x_bearer_token" not in existing:
+                await conn.execute(
+                    "ALTER TABLE bot_config ADD COLUMN x_bearer_token TEXT DEFAULT ''"
+                )
+                logger.info("Migrated: added x_bearer_token to bot_config")
 
             # Migrate symbol_config: add strategy column
             sym_cols = await conn.fetch(
@@ -467,6 +487,92 @@ class Store:
                     "SELECT * FROM trail_snapshots ORDER BY ts DESC LIMIT $1", limit,
                 )
             return [dict(r) for r in rows]
+
+    # -- x headlines -----------------------------------------------------------
+
+    async def get_latest_headline_id(self, account: str) -> str | None:
+        """Get the most recent tweet ID for since_id tracking."""
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(
+                "SELECT tweet_id FROM x_headlines WHERE account = $1 ORDER BY created_at DESC LIMIT 1",
+                account,
+            )
+
+    async def store_headlines(self, tweets: list[dict], account: str) -> int:
+        """Store tweets, skip duplicates. Returns count of new tweets."""
+        if not tweets:
+            return 0
+        new_count = 0
+        async with self.pool.acquire() as conn:
+            for t in tweets:
+                metrics = t.get("public_metrics", {})
+                try:
+                    await conn.execute(
+                        """INSERT INTO x_headlines
+                           (tweet_id, account, text, created_at, likes, retweets, replies)
+                           VALUES ($1, $2, $3, $4, $5, $6, $7)
+                           ON CONFLICT (tweet_id) DO NOTHING""",
+                        t["id"],
+                        account,
+                        t["text"],
+                        t["created_at"],
+                        metrics.get("like_count", 0),
+                        metrics.get("retweet_count", 0),
+                        metrics.get("reply_count", 0),
+                    )
+                    new_count += 1
+                except Exception:
+                    pass  # duplicate or parse error
+        return new_count
+
+    async def get_recent_headlines(self, hours: int = 24, limit: int = 60) -> list[dict]:
+        """Get recent headlines for bias analysis."""
+        async with self.pool.acquire() as conn:
+            from datetime import timedelta, timezone
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+            rows = await conn.fetch(
+                """SELECT tweet_id, account, text, created_at, likes, retweets, replies
+                   FROM x_headlines
+                   WHERE created_at >= $1
+                   ORDER BY created_at DESC
+                   LIMIT $2""",
+                cutoff, limit,
+            )
+            return [
+                {
+                    "id": r["tweet_id"],
+                    "account": r["account"],
+                    "text": r["text"],
+                    "created_at": r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else str(r["created_at"]),
+                    "likes": r["likes"],
+                    "retweets": r["retweets"],
+                }
+                for r in rows
+            ]
+
+    async def cleanup_old_headlines(self, days: int = 3) -> int:
+        """Delete headlines older than N days."""
+        async with self.pool.acquire() as conn:
+            from datetime import timedelta, timezone
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+            result = await conn.execute(
+                "DELETE FROM x_headlines WHERE created_at < $1", cutoff
+            )
+            deleted = int(result.split()[-1]) if result else 0
+            if deleted:
+                logger.info(f"Cleaned up {deleted} headlines older than {days} days")
+            return deleted
+
+    async def get_headline_stats(self) -> dict:
+        """Get headline count and date range."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT COUNT(*) as total,
+                       MIN(created_at) as oldest,
+                       MAX(created_at) as newest
+                FROM x_headlines
+            """)
+            return dict(row) if row else {"total": 0, "oldest": None, "newest": None}
 
     # -- bias signals ----------------------------------------------------------
 

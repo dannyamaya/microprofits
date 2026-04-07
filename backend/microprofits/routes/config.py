@@ -24,6 +24,7 @@ class BotConfigUpdate(BaseModel):
     manual_mode: bool | None = None
     bias_filter_on: bool | None = None
     bias_min_confidence: int | None = None
+    x_bearer_token: str | None = None
 
 
 class SymbolConfigUpdate(BaseModel):
