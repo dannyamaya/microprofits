@@ -10,3 +10,11 @@ dist/
 .claude/
 build/
 .pytest_cache/
+
+# billionbot secrets and runtime data
+billionbot/config.json
+billionbot/data/
+billionbot/.venv/
+billionbot/uv.lock
+# Allow billionbot's .claude skills (root .claude/ rule would block them)
+!billionbot/.claude/

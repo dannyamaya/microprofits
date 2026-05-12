@@ -1,0 +1,17 @@
+[project]
+name = "billionbot"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aiosqlite>=0.22.1",
+    "anthropic>=0.101.0",
+    "feedparser>=6.0.12",
+    "httpx>=0.28.1",
+    "pandas>=3.0.2",
+    "psycopg2-binary>=2.9.12",
+    "requests-oauthlib>=2.0.0",
+    "tweepy>=4.16.0",
+    "yfinance>=1.2.0",
+]

@@ -1,0 +1,13 @@
+{
+  "discord_webhook": "https://discord.com/api/webhooks/...",
+  "discord_webhook_dispatch": "https://discord.com/api/webhooks/...",
+  "supabase_url": "postgresql://postgres:<password>@db.<project>.supabase.co:5432/postgres",
+  "claude_oauth_token": "sk-ant-oat01-...",
+  "x_api": {
+    "bearer_token": "",
+    "consumer_key": "",
+    "consumer_secret": "",
+    "access_token": "",
+    "access_token_secret": ""
+  }
+}
